@@ -1,0 +1,24 @@
+{
+  "name": "clip-generation-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion compositions for final video assembly + animated captions.",
+  "type": "commonjs",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.489",
+    "@remotion/cli": "^4.0.489",
+    "@remotion/renderer": "^4.0.489",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.489"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.7.3"
+  }
+}

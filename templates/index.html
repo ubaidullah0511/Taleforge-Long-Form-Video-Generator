@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B-Roll Retrieval System</title>
+    <style>
+      :root {
+        --bg: #f4f5f7;
+        --card: #ffffff;
+        --border: #e2e4e9;
+        --text: #1f2430;
+        --muted: #6b7280;
+        --accent: #2563eb;
+        --accent-dim: #eef2ff;
+        --good: #16a34a;
+        --warn: #d97706;
+        --warn-bg: #fffbeb;
+        --code-bg: #111827;
+        --code-text: #f9fafb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      h1 { font-size: 1.4rem; margin: 0 0 4px; }
+      .subtitle { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; }
+
+      /* Pipeline strip */
+      .pipeline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+      .pipeline .step {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.8rem;
+        white-space: nowrap;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .pipeline .step.active {
+        background: var(--accent-dim);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .pipeline .arrow { color: var(--muted); }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+      }
+      .card h2 { margin-top: 0; font-size: 1.1rem; }
+      .card p.hint { color: var(--muted); font-size: 0.85rem; margin-top: -8px; }
+
+      textarea, input, select {
+        width: 100%;
+        padding: 10px;
+        margin-top: 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.9rem;
+      }
+      label { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+      .row > div { flex: 1; min-width: 180px; }
+
+      button {
+        padding: 10px 16px;
+        margin-top: 14px;
+        border: none;
+        border-radius: 6px;
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 0.9rem;
+      }
+      button:disabled { background: #94a3b8; cursor: wait; }
+
+      .status { font-size: 0.85rem; margin-top: 10px; color: var(--muted); }
+      .status.error { color: #dc2626; }
+
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.82rem; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; background: #fafafa; }
+      tr:hover td { background: #fafbff; }
+
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 600;
+      }
+      .badge.local { background: #ecfdf5; color: var(--good); }
+      .badge.pexels, .badge.pexels_video, .badge.pexels_images { background: var(--accent-dim); color: var(--accent); }
+      .badge.pixabay, .badge.pixabay_video, .badge.pixabay_images { background: #fdf4ff; color: #a21caf; }
+      .badge.internet_archive, .badge.wikimedia, .badge.nasa { background: #fef2f2; color: #b91c1c; }
+      .badge.none, .badge.placeholder { background: var(--warn-bg); color: var(--warn); }
+      .badge.yes { background: #ecfdf5; color: var(--good); }
+      .badge.no { background: #f3f4f6; color: var(--muted); }
+
+      .cards-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .clip-card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 0.82rem;
+      }
+      .clip-card.placeholder { border-color: var(--warn); background: var(--warn-bg); }
+      .clip-card .clip-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+      .clip-card .clip-head strong { font-size: 0.95rem; }
+      .clip-card .time { color: var(--muted); font-size: 0.75rem; }
+      .clip-card .script { margin: 6px 0; color: var(--text); }
+      .clip-card .meta-line { color: var(--muted); font-size: 0.75rem; margin: 3px 0; }
+      .clip-card code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 0.75rem; word-break: break-all; }
+      .clip-card .alt-count { font-size: 0.72rem; color: var(--muted); }
+
+      .summary-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+      .summary-pill {
+        background: #fafafa;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.8rem;
+      }
+      .summary-pill b { font-size: 1.1rem; display: block; }
+
+      details { margin-top: 14px; }
+      details summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
+      pre {
+        white-space: pre-wrap;
+        background: var(--code-bg);
+        color: var(--code-text);
+        padding: 12px;
+        border-radius: 6px;
+        overflow: auto;
+        font-size: 0.78rem;
+        margin-top: 8px;
+      }
+      .empty-note { color: var(--muted); font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <h1>B-Roll Retrieval System</h1>
+    <p class="subtitle">Two pipelines: per-scene B-roll matching (/process-script) and the full documentary visual research pipeline (/generate-documentary-timeline).</p>
+
+    <div class="pipeline" id="docPipelineStrip">
+      <div class="step" data-stage="input">1. Script Input</div>
+      <span class="arrow">&rarr;</span>
+      <div class="step" data-stage="table">2. Table Generation (LLM)</div>
+      <span class="arrow">&rarr;</span>
+      <div class="step" data-stage="search">3. Asset Search (7 providers)</div>
+      <span class="arrow">&rarr;</span>
+      <div class="step" data-stage="score">4. Scoring &amp; Dedup</div>
+      <span class="arrow">&rarr;</span>
+      <div class="step" data-stage="download">5. Download</div>
+      <span class="arrow">&rarr;</span>
+      <div class="step" data-stage="timeline">6. Timeline Output</div>
+    </div>
+
+    <div class="card">
+      <h2>Process Script <span style="color: var(--muted); font-weight: normal; font-size: 0.8rem;">(one best clip per scene)</span></h2>
+      <p class="hint">Splits the script into scenes and picks the single best-matching clip for each, from the local library or Pexels/Pixabay.</p>
+      <textarea id="processInput" rows="6" placeholder="Enter raw data or script"></textarea>
+      <div class="row">
+        <div>
+          <label>Use field</label>
+          <select id="processField">
+            <option value="script">script</option>
+            <option value="raw_data">raw_data</option>
+          </select>
+        </div>
+      </div>
+      <button id="processBtn" onclick="runProcessScript()">Run</button>
+      <div class="status" id="processStatus"></div>
+      <div id="processResults"></div>
+    </div>
+
+    <div class="card">
+      <h2>Generate Documentary Timeline <span style="color: var(--muted); font-weight: normal; font-size: 0.8rem;">(full research pipeline)</span></h2>
+      <p class="hint">Runs all 6 pipeline stages above: table generation, multi-provider search, scoring, dedup, parallel download, and timeline/table output on disk.</p>
+      <textarea id="timelineInput" rows="6" placeholder="Enter raw narration script (ignored if a script file is uploaded below)"></textarea>
+      <div class="row">
+        <div>
+          <label>Script file (.txt, optional — overrides the textarea)</label>
+          <input id="scriptFile" type="file" accept=".txt,text/plain" />
+        </div>
+        <div>
+          <label>Voiceover recording (optional — real Whisper timing instead of the word-count estimate)</label>
+          <input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Project name</label>
+          <input id="projectName" placeholder="optional" />
+        </div>
+        <div>
+          <label>Allow duplicate assets</label>
+          <input id="allowDuplicates" type="checkbox" />
+        </div>
+        <div>
+          <label>Max downloads</label>
+          <input id="maxDownloads" type="number" min="0" placeholder="optional" />
+        </div>
+      </div>
+      <button id="timelineBtn" onclick="runTimeline()">Run</button>
+      <div class="status" id="timelineStatus"></div>
+      <div id="timelineResults"></div>
+    </div>
+
+    <script>
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (c) => (
+          { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+        ));
+      }
+
+      function setStage(stage) {
+        document.querySelectorAll("#docPipelineStrip .step").forEach((el) => {
+          el.classList.toggle("active", el.dataset.stage === stage);
+        });
+      }
+
+      async function callApi(url, body, statusEl, button) {
+        return sendRequest(url, statusEl, button, {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+
+      async function callApiMultipart(url, formData, statusEl, button) {
+        // No Content-Type header here on purpose — the browser sets the
+        // multipart boundary itself when the body is a FormData object.
+        return sendRequest(url, statusEl, button, { body: formData });
+      }
+
+      async function sendRequest(url, statusEl, button, fetchOptions) {
+        statusEl.className = "status";
+        statusEl.textContent = "Running...";
+        button.disabled = true;
+        try {
+          const response = await fetch(url, { method: "POST", ...fetchOptions });
+          const raw = await response.text();
+          let data;
+          try {
+            data = raw ? JSON.parse(raw) : {};
+          } catch {
+            data = { detail: raw };
+          }
+          if (!response.ok) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Error ${response.status}: ${data.detail || raw}`;
+            return null;
+          }
+          statusEl.textContent = "Done.";
+          return data;
+        } catch (err) {
+          statusEl.className = "status error";
+          statusEl.textContent = `Request failed: ${err}`;
+          return null;
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function runProcessScript() {
+        const input = document.getElementById("processInput").value;
+        const field = document.getElementById("processField").value;
+        const body = { [field]: input };
+        const statusEl = document.getElementById("processStatus");
+        const button = document.getElementById("processBtn");
+
+        const data = await callApi("/process-script", body, statusEl, button);
+        renderProcessResults(data);
+      }
+
+      function renderProcessResults(scenes) {
+        const container = document.getElementById("processResults");
+        if (!scenes) { container.innerHTML = ""; return; }
+        if (scenes.length === 0) {
+          container.innerHTML = '<p class="empty-note">No scenes returned.</p>';
+          return;
+        }
+        const rows = scenes.map((s) => `
+          <tr>
+            <td>${s.scene}</td>
+            <td>${escapeHtml(s.script)}</td>
+            <td><span class="badge ${escapeHtml(s.source)}">${escapeHtml(s.source)}</span></td>
+            <td>${s.selected_clip ? `<code>${escapeHtml(s.selected_clip)}</code>` : "&mdash;"}</td>
+            <td>${s.similarity != null ? s.similarity.toFixed(2) : "&mdash;"}</td>
+            <td><span class="badge ${s.downloaded ? "yes" : "no"}">${s.downloaded ? "yes" : "no"}</span></td>
+            <td><span class="badge ${s.cached ? "yes" : "no"}">${s.cached ? "yes" : "no"}</span></td>
+          </tr>`).join("");
+        container.innerHTML = `
+          <table>
+            <thead><tr><th>Scene</th><th>Script</th><th>Source</th><th>Clip</th><th>Similarity</th><th>Downloaded</th><th>Cached</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre>${escapeHtml(JSON.stringify(scenes, null, 2))}</pre>
+          </details>`;
+      }
+
+      async function runTimeline() {
+        const input = document.getElementById("timelineInput").value;
+        const projectName = document.getElementById("projectName").value;
+        const allowDuplicates = document.getElementById("allowDuplicates").checked;
+        const maxDownloads = document.getElementById("maxDownloads").value;
+        const scriptFile = document.getElementById("scriptFile").files[0];
+        const audioFile = document.getElementById("audioFile").files[0];
+
+        const statusEl = document.getElementById("timelineStatus");
+        const button = document.getElementById("timelineBtn");
+
+        setStage("input");
+        await new Promise((r) => setTimeout(r, 150));
+        setStage("table");
+
+        let data;
+        if (scriptFile || audioFile) {
+          // Uploading a file requires multipart/form-data — a different
+          // endpoint (JSON and File/Form params can't share one FastAPI route).
+          const formData = new FormData();
+          formData.append("script", input);
+          if (projectName) formData.append("project_name", projectName);
+          if (allowDuplicates) formData.append("allow_duplicate_assets", "true");
+          if (maxDownloads) formData.append("max_downloads", maxDownloads);
+          if (scriptFile) formData.append("script_file", scriptFile);
+          if (audioFile) formData.append("audio_file", audioFile);
+          data = await callApiMultipart("/generate-documentary-timeline/upload", formData, statusEl, button);
+        } else {
+          const body = { script: input };
+          if (projectName) body.project_name = projectName;
+          if (allowDuplicates) body.allow_duplicate_assets = true;
+          if (maxDownloads) body.max_downloads = Number(maxDownloads);
+          data = await callApi("/generate-documentary-timeline", body, statusEl, button);
+        }
+
+        setStage(data ? "timeline" : null);
+        renderTimelineResults(data);
+      }
+
+      function renderTimelineResults(result) {
+        const container = document.getElementById("timelineResults");
+        if (!result) { container.innerHTML = ""; return; }
+
+        const table = result.table || [];
+        const timeline = result.timeline || [];
+        const placeholders = timeline.filter((t) => t.placeholder).length;
+        const downloaded = timeline.length - placeholders;
+
+        const summary = `
+          <div class="summary-strip">
+            <div class="summary-pill"><b>${escapeHtml(result.project_dir)}</b>project directory</div>
+            <div class="summary-pill"><b>${table.length}</b>clips generated</div>
+            <div class="summary-pill"><b>${downloaded}</b>with assets</div>
+            <div class="summary-pill"><b>${placeholders}</b>placeholders</div>
+          </div>
+          ${result.final_video_path
+            ? `<p class="empty-note">Final video: <code>${escapeHtml(result.final_video_path)}</code></p>`
+            : result.assembly_error
+              ? `<p class="empty-note" style="color:#dc2626;">Assembly failed: ${escapeHtml(result.assembly_error)}</p>`
+              : ""}
+          ${result.subtitled_video_path
+            ? `<p class="empty-note">Subtitled video: <code>${escapeHtml(result.subtitled_video_path)}</code> (captions: <code>${escapeHtml(result.subtitles_path)}</code>)</p>`
+            : result.subtitle_error
+              ? `<p class="empty-note" style="color:#dc2626;">Subtitle burn-in failed: ${escapeHtml(result.subtitle_error)}</p>`
+              : ""}
+          ${result.transcript_alignment_warning
+            ? `<p class="empty-note" style="color:var(--warn); white-space: pre-wrap;">&#9888; Script/audio alignment: ${escapeHtml(result.transcript_alignment_warning)}</p>`
+            : ""}
+          ${result.final_video_with_narration_path
+            ? `<p class="empty-note"><strong>Final video with narration audio: <code>${escapeHtml(result.final_video_with_narration_path)}</code></strong></p>`
+            : result.audio_mux_error
+              ? `<p class="empty-note" style="color:#dc2626;">Muxing narration audio failed: ${escapeHtml(result.audio_mux_error)}</p>`
+              : ""}`;
+
+        const tableRows = table.map((c) => `
+          <tr>
+            <td>${c.clip_number}</td>
+            <td>${escapeHtml(c.start)}&ndash;${escapeHtml(c.end)}</td>
+            <td>${escapeHtml(c.section)}</td>
+            <td>${escapeHtml(c.script_beat)}</td>
+            <td>${escapeHtml(c.canva_keyword)}</td>
+            <td>${escapeHtml(c.fallback_keyword)}</td>
+            <td>${escapeHtml(c.visual_type)}</td>
+            <td>${escapeHtml(c.edit_note)}</td>
+          </tr>`).join("");
+
+        const cards = timeline.map((t) => {
+          if (t.placeholder) {
+            return `
+              <div class="clip-card placeholder">
+                <div class="clip-head"><strong>Clip ${t.clip_number}</strong><span class="time">${escapeHtml(t.start)}&ndash;${escapeHtml(t.end)}</span></div>
+                <div class="script">${escapeHtml(t.script)}</div>
+                <div class="meta-line"><span class="badge placeholder">placeholder</span> ${escapeHtml(t.note)}</div>
+                <div class="meta-line">effect: ${escapeHtml(t.recommended_effect)} &middot; transition: ${escapeHtml(t.transition)}</div>
+              </div>`;
+          }
+          const asset = t.asset_metadata || {};
+          return `
+            <div class="clip-card">
+              <div class="clip-head"><strong>Clip ${t.clip_number}</strong><span class="time">${escapeHtml(t.start)}&ndash;${escapeHtml(t.end)} (${t.duration}s)</span></div>
+              <div class="script">${escapeHtml(t.script)}</div>
+              <div class="meta-line"><span class="badge ${escapeHtml(asset.source)}">${escapeHtml(asset.source)}</span> ${escapeHtml(asset.media_type)} &middot; score ${asset.score} &middot; <span class="badge ${t.status === 'ok' ? 'yes' : 'placeholder'}">${escapeHtml(t.status || 'ok')}</span></div>
+              <div class="meta-line"><code>${escapeHtml(t.asset_path)}</code></div>
+              <div class="meta-line">effect: ${escapeHtml(t.recommended_effect)} &middot; transition: ${escapeHtml(t.transition)}</div>
+            </div>`;
+        }).join("");
+
+        container.innerHTML = `
+          ${summary}
+          <details open>
+            <summary>Visual timeline table (${table.length} clips)</summary>
+            <table>
+              <thead><tr><th>#</th><th>Time</th><th>Section</th><th>Beat</th><th>Canva KW</th><th>Fallback KW</th><th>Visual Type</th><th>Edit Note</th></tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </details>
+          <details open>
+            <summary>Resolved assets (${timeline.length} clips)</summary>
+            <div class="cards-grid">${cards}</div>
+          </details>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>
+          </details>`;
+      }
+    </script>
+  </body>
+</html>

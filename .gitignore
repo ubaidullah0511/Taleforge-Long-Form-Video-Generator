@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/chroma/
+clips/local/*
+clips/downloaded/*
+!clips/local/.gitkeep
+!clips/downloaded/.gitkeep
+projects/
+uploads/
+.pytest_cache/
+.cache/
+.remotion/
+remotion/node_modules/
+node_modules/
+.claude/

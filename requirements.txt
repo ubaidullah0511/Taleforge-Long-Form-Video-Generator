@@ -1,0 +1,10 @@
+fastapi
+python-multipart
+uvicorn[standard]
+pydantic-settings
+groq>=1.5.0
+sentence-transformers
+chromadb
+httpx
+python-dotenv
+pytest
