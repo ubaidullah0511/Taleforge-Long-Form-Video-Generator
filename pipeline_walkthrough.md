@@ -1,0 +1,216 @@
+# Keyword Generation → Search → Selection Pipeline: A Walkthrough
+
+This document describes exactly what the current code in this repository does, end to end, to turn one script into a sequence of stock-footage clips. It is based on a direct reading of `app/documentary_table.py`, `app/documentary_pipeline.py`, `app/niches.py`, `app/scoring.py`, `app/visual_verification.py`, `app/asset_selection.py`, and `app/stock/{pexels,pixabay}.py`, plus a live trace of the real search/scoring code against the real Pexels/Pixabay APIs. It documents the documentary pipeline (`POST /generate-documentary-timeline`), not the older simple `/process-script` pipeline.
+
+## 1. High-level summary
+
+A script gets split by an LLM into short "beats" (roughly 3-7 seconds of narration each), and each beat gets two short search phrases — a primary `canva_keyword` and a broader `fallback_keyword` — written under a strict "niche lock" (e.g. only pool-maintenance or only trucking visuals) and a rule that abstract ideas ("chlorine effectiveness") must be translated into something literally filmable ("person testing pool pH"). For each beat, the pipeline searches Pexels and Pixabay (video and image) in a fixed order, trying the primary keyword first and the fallback second; if neither keyword returns anything usable, an LLM generates three more literal search phrases as a last resort. Every raw result is text-filtered against a niche denylist, scored by a metadata-based heuristic (semantic similarity, historical fit, resolution, "cinematic value", motion), and ranked best-first. The pipeline then walks that ranked list downloading candidates one at a time: each download is normalized to 16:9 (cropped or blur-padded), and the actual downloaded video frame is checked against the keyword using CLIP (an image/text visual-similarity model) before being accepted. A candidate that fails any of these checks is discarded and the next-best candidate is tried; a beat that exhausts every candidate becomes a black placeholder in the final timeline rather than blocking the whole run. Cross-clip repetition is capped so the same stock asset can't be reused indefinitely across one video. None of this guarantees a perfect visual match — it's a chain of heuristics and thresholds, not a human editor, and the document's last section is explicit about where it's known to fall short.
+
+## 2. Keyword Generation
+
+### 2.1 How the script becomes individual beats
+
+Beat boundaries are decided by an LLM, not by any deterministic rule in this codebase. `app/documentary_table.py::CONVERSION_PROMPT` instructs the model to:
+
+> "Break the script into logical visual beats of approximately 3-7 seconds each."
+
+and to return one row per beat with `clip_number`, `section`, `script_beat`, `canva_keyword`, `fallback_keyword`, `visual_type`, `edit_note`, `word_count`. The model decides where one beat ends and the next begins — the code only post-processes the model's own row boundaries. Three deterministic passes run after that LLM call:
+
+- **Chunking for long scripts** (`convert_script_to_visual_table` → `_split_script_into_chunks`): scripts over `_MAX_WORDS_PER_CONVERSION_CALL` (400 words) are split at sentence boundaries and converted one chunk at a time, because a single unbounded call was observed to silently truncate its JSON beats array once the response neared the model's output-token ceiling. `clip_number` is renumbered sequentially across all chunks afterward.
+- **Timing** (`assign_timings` → `_build_timeline_clip`): if real narration audio was supplied, each beat's `start`/`end` come from matching the beat's own text against the actual Whisper word-level transcript (`_consume_whisper_span` / `_find_best_whisper_span`), not from assuming the beat is exactly `len(script_beat.split())` words long — this handles narrators ad-libbing or skipping filler words. Without audio, timing falls back to a fixed pace of `WORDS_PER_SECOND = 2`, clamped to `MIN_CLIP_SECONDS=3`–`MAX_CLIP_SECONDS=5`. If the transcript runs longer than the LLM's own row set, `_cover_trailing_narration` generates additional rows for the leftover audio by re-running the same script→table conversion on just that leftover text.
+- **Duration cap** (`_enforce_max_clip_duration` → `_split_long_clip`): any row still longer than `MAX_ON_SCREEN_CLIP_SECONDS = 5.0` after timing is split into equal-length sub-rows, each with its **own independently-generated** `canva_keyword`/`fallback_keyword` (via `_keywords_for_subclip`, reusing `convert_script_to_visual_table` on just that sub-row's text slice) rather than inheriting the parent row's keyword unchanged.
+- `_force_contiguity` runs after both timing passes as a final, unconditional pass: it forces every row's `start` to exactly equal the previous row's `end`, closing any gap or overlap regardless of how upstream timing computed it (a real pause in narration is not preserved — see Known Limitations).
+
+### 2.2 `canva_keyword` vs `fallback_keyword`
+
+Both are generated by the same LLM call, per beat:
+
+- **`canva_keyword`** is the primary, specific search phrase — "exactly the way a person would type it into a stock footage search bar" (2-4 words), centered on the beat's most concrete filmable noun.
+- **`fallback_keyword`** is a **broader but still same-niche** term, used only if `canva_keyword` finds nothing usable. The prompt is explicit that this must stay a generalization of the same topic, not a topic switch — e.g. if canva is `"Cold case murder investigation Maine"`, fallback should be `"Investigation crime scene"`, never `"Nature documentary"`.
+
+`canva_keyword` is also reused later, unchanged, as the exact text CLIP verifies the downloaded frame against (see §4).
+
+### 2.3 The rules the LLM follows, and a real example
+
+`CONVERSION_PROMPT` (`app/documentary_table.py:21-98`) is built with a `{niche_context}` block injected from `app/niches.py::NicheConfig.system_context` — this is the "niche lock." For example, the `pool_maintenance` niche's `system_context` states the content is "strictly about SWIMMING POOL MAINTENANCE, POOL CHEMISTRY..." and explicitly forbids "ocean or beach swimming, lakes, rivers, water parks... unrelated household cleaning," with one carved-out exception for beats specifically about *where a product is bought* (store/aisle shots are allowed only for those beats).
+
+Three more rules apply on top of the niche lock:
+1. **Length**: `canva_keyword` must be 2-4 words, written as a literal search-bar query, not a sentence or edit instruction (`"Illustrate boron density in a controlled pool environment"` is explicitly called out as WRONG; `"Borax powder pool"` is RIGHT).
+2. **Concrete-noun centering**: if the beat mentions a filmable noun directly (algae, borax, a test strip), the keyword should center on that noun, not a paraphrase around it.
+3. **Abstract-to-concrete translation**: if the beat's *concept* is a measurement, judgment, cost, or comparison rather than a physical thing, the keyword must describe what that concept would **look like on camera**, not just a shortened version of the abstract word. The prompt gives worked pairs, e.g. `"Chlorine effectiveness"` (WRONG) → `"Pool chlorine test kit"` (RIGHT); `"Unbalanced pool chemistry"` (WRONG) → `"Cloudy pool water"` (RIGHT, the visible *result* of the abstract state).
+
+**Real example**, from a `pool_maintenance` project's `timeline_table.md`, clip 8:
+
+> Section: pH Levels
+> Script beat: *"Pool pH affects how efficiently chlorine sanitizes the water."*
+> → `canva_keyword`: **"Pool pH testing"**
+> → `fallback_keyword`: **"Chemical testing pool"**
+
+This is the rule working as intended: "how efficiently chlorine sanitizes" is an abstract efficiency judgment, and the model translated it into the literal, filmable action a camera could actually see — someone testing pool water — rather than trying to shoot "efficiency" itself. `fallback_keyword` stays in the same niche but generalizes from "pH" specifically to "chemical testing" broadly.
+
+The rule is not applied perfectly every time. From the same real table, clip 10:
+
+> Script beat: *"When the pH repeatedly changes, chlorine performance also changes."*
+> → `canva_keyword`: **"Chlorine performance change"**
+
+This is close to the prompt's own WRONG example (`"Chlorine effectiveness"`) — a shortened abstract phrase rather than a concrete translation. This is a real, observed instance of the LLM not following the rule, not a hypothetical — see §5 (Known Limitations).
+
+### 2.4 When the second (semantic) keyword-generation path fires
+
+`_generate_semantic_keywords` (`app/documentary_pipeline.py:217`), using `_SEMANTIC_KEYWORD_PROMPT`, is a **separate, later** LLM call — it only runs inside `search_clip`, and only after both `canva_keyword` and `fallback_keyword` have already been tried against a given provider and produced nothing usable (see §3 for the exact per-provider tier logic). Concretely, for a given provider, it fires when:
+
+- Neither keyword tier returned any raw hits at all, **or**
+- Every hit returned was already at the cross-clip repeat cap (`_has_unused_hit` returns False) — a tier full of maxed-out duplicates counts as "no usable results," not as "results found."
+
+It is skipped entirely (not attempted) when the provider call itself timed out or failed to connect (`_safe_search` returning `None`) — that's treated as "give up on this provider for this clip," not "escalate to semantic." It's also skipped entirely when `use_semantic_fallback=False`, which is how `check_footage_availability` (the pre-render scan) deliberately avoids paying for extra LLM calls.
+
+When it does fire, it's computed **once per `search_clip` call** (cached in the `semantic_keywords` local, reused across every remaining provider in the loop, not regenerated per-provider) and produces exactly 3 phrases. Those phrases go through a second LLM self-check, `_keywords_are_concrete` (using `_CONCRETENESS_CHECK_PROMPT`), which asks the model to flag its own output as abstract/metaphorical; if any phrase fails, the keywords are regenerated once (not retried indefinitely — a flaky check is never allowed to block the pipeline). The final phrases are then run through `_apply_niche_filter_to_keywords`, which substitutes `niche_config.safe_fallback_keyword` for any phrase that still violates the niche denylist.
+
+## 3. Search
+
+### 3.1 Providers, order, and which keyword
+
+`search_clip` (`app/documentary_pipeline.py:306`) walks a fixed provider list, in a niche-dependent order:
+
+- **`PROVIDER_ORDER_DEFAULT`**: Pexels video, Pixabay video, Pexels images, Pixabay images, Internet Archive, Wikimedia, NASA.
+- **`PROVIDER_ORDER_HISTORICAL`**: Internet Archive, Wikimedia, NASA first, then the same four stock-site providers — used when `niche_for_clip(clip)` maps the beat's `visual_type` (Archive/Historical/Military/Documents) to `"historical"`. (`visual_type` in {Industry, Technology, Sports, Exercise Demo} maps to `"modern"`; everything else, including the common `B-roll` type, maps to `"general"`.) This `niche` is unrelated to `content_niche` (trucks/pool_maintenance) — one picks provider order, the other locks keyword content.
+- Internet Archive is dropped from the list entirely if the active `content_niche`'s `NicheConfig.use_archive_org` is `False` — currently true for **both** built-in niches (`trucks`, `pool_maintenance`), since Archive.org's catalog is deep for historical footage but has almost nothing for contemporary lifestyle content.
+
+For each provider, up to two keyword tiers are tried **in order**: `canva_keyword` first, then `fallback_keyword` — the loop moves to the next tier only if the current one returns no raw hits, or only hits that are already at the repeat cap (see §3.4). If a provider times out or errors on a tier, the remaining tiers for *that provider* are skipped outright (not retried) and the loop moves to the next provider. The whole provider loop stops early once both video and image "buckets" are already `_satisfied` — either one hit scored ≥ `documentary_high_quality_score` (90), or the count of hits scored ≥ `documentary_min_score` (50) meets the per-niche requirement in `settings.documentary_niche_min_assets` (e.g. `{"video": 2, "image": 2}` for `"general"`).
+
+### 3.2 Raw result → candidate
+
+Each provider module implements one `search(query, per_page) -> list[StockHit]`. `StockHit` (`app/stock/base.py`) carries `source`, `source_id`, `download_url`, `width`, `height`, `duration`, `media_type` (`"video"`/`"image"`), and `text` (used for niche/relevance checks).
+
+- **Pexels** (`app/stock/pexels.py`): picks the highest-width file from each result's `video_files`; Pexels' own `tags` field is empty in practice, so `text` is instead derived from the result's URL slug (`.../semi-truck-climbing-a-mountain-18749847/` → `"semi truck climbing a mountain"`).
+- **Pixabay** (`app/stock/pixabay.py`): picks the best available quality tier in order `large > medium > small > tiny`; `text` is the provider's own `tags` string directly. The query string is truncated to 100 characters (Pixabay's own limit).
+
+### 3.3 How many results are requested
+
+`_safe_search` calls `provider.search(query, per_page=5)` — **5 results per query**, with a 10-second timeout per call. A timeout or connection failure returns `None` (distinct from a genuinely empty list), which is the signal that stops trying further keywords against that specific provider for that clip.
+
+### 3.4 Zero results, or only already-used results
+
+`_has_unused_hit` decides whether a tier's raw results count as "found something": with `allow_duplicates=False` (the default), a tier only counts if at least one hit's `(source, source_id)` is still under `settings.max_asset_repeat_count` (default **1** — true never-repeat) in the run's `used_assets` counter. A tier that returns 5 hits that are *all* already at the cap is treated identically to an empty tier: the loop moves to the next keyword tier (or the next provider, or the semantic fallback) instead of silently reusing a maxed-out asset.
+
+## 4. Selection / Scoring
+
+This is the exact order of operations from a raw provider hit to acceptance or rejection.
+
+### 4.1 Pre-scoring filters (before any download)
+
+Inside the `raw_hits` loop in `search_clip` (`app/documentary_pipeline.py:414-433`), each hit passes through, in order:
+
+1. **Dedup cap** — if `used_assets[(source, source_id)] >= max_asset_repeat_count` and `allow_duplicates` is off, skip.
+2. **Low-resolution floor** (`_known_unusably_low_res`) — only rejects if the provider *reported* dimensions and they're already known to be below the low-res floor (see §4.3); aspect ratio alone is **not** a pre-download rejection reason anymore (non-16:9 gets normalized after download instead).
+3. **Niche denylist/positive-term check** (`_check_candidate_niche` → `app.niches.candidate_violates_niche`) — checks the hit's own `text` (tags/title/URL-slug) against the active niche's `banned_terms`. This is **not** a blind substring-contains check: a banned term only causes rejection if none of the niche's `positive_terms` also appear in the same text. E.g. for the `trucks` niche, ordinary highway footage tagged `"cars, truck, highway"` is *not* rejected (a truck signal is present alongside "cars"), but footage tagged only `"cars in the road"` for a "highway" search *is* rejected. If a provider gives no text metadata at all, this check can't run — the candidate passes through unfiltered (logged once per source, not spammed per-candidate), relying on the keyword-generation-side niche lock as the only remaining guard for that candidate.
+
+A hit surviving all three is scored and appended to `video_hits` or `image_hits` (`ScoredAsset(hit, score)`).
+
+### 4.2 Scoring formula
+
+`score_asset` (`app/scoring.py`) is a weighted sum of five 0.0-1.0 components, each capturing a different heuristic signal, multiplied by 100 for a 0-100 `total_score`:
+
+| Component | Weight | What it measures |
+|---|---|---|
+| `semantic` | 0.40 | Cosine similarity between an embedding of `f"{canva_keyword} {script_beat}"` (the query) and an embedding of the hit's own `text` metadata |
+| `historical` | 0.20 | 1.0 if an archival source (`internet_archive`/`wikimedia`/`nasa`) matches a historical `visual_type`; 0.6 if only one of the two is true; 0.5 otherwise |
+| `quality` | 0.15 | `min(1.0, width*height / (1920*1080))` — raw pixel count relative to 1080p |
+| `cinematic` | 0.15 | 0.8 base for video / 0.4 for image, plus up to +0.2 more scaled by the quality score |
+| `motion` | 0.10 | 1.0 for video, 0.0 for image |
+
+The module's own comment flags this explicitly as "a heuristic scorer using metadata already returned by the provider APIs, not a real visual-content model" — CLIP verification (§4.4) is the actual visual check, added later, on top of this metadata-only score.
+
+`rank_acceptable_assets` then filters to hits scoring ≥ `documentary_min_score` (50) and sorts them best-first across both video and image pools — there is no hard preference for video over image; a stronger-scoring image can outrank a weaker video.
+
+### 4.3 Download + 16:9 normalization
+
+`_resolve_clip` walks the ranked candidate list best-score-first. For each candidate: it's downloaded in full (`_download_asset`), then its *actual* dimensions are probed with `ffprobe` (not trusted from provider metadata, which can be missing or wrong). If not exactly 16:9:
+- If the actual dimensions are below the low-res floor (`_is_too_low_res` — smaller dimension under 480px), the file is deleted and the loop moves to the next-best candidate.
+- Otherwise it's normalized via `normalize_to_16_9` (`app/asset_selection.py`): **cropped** to 1920×1080 if `width >= height` (landscape or square — a cover-crop only trims a modest amount), or **blur-padded** (scaled to fit fully inside the frame, with a blurred cover-scaled copy of itself filling the remaining space) if `height > width` (portrait — a crop there would cut away most of the subject). A normalization failure (ffmpeg error) also deletes the file and moves to the next candidate.
+
+### 4.4 CLIP visual verification
+
+`passes_visual_verification(asset.path, clip.canva_keyword)` (`app/visual_verification.py`) — this now runs against `canva_keyword` **alone**, not `canva_keyword + script_beat`. This is a fix made this session: passing the full narration sentence (19-40+ words of prose, dosage amounts, chemistry explanation) diluted the text past CLIP's 77-token limit and dragged genuinely correct matches below threshold in a real pipeline run — three actual weighing-scale videos for a "weighing pool chemicals" beat scored 0.227-0.236 against the diluted text and were wrongly rejected. `canva_keyword` is already short/concrete/filmable by construction, which is what CLIP's text encoder needs.
+
+Mechanically: a frame is grabbed from the middle of the downloaded video (avoids black start/end fades), encoded alongside the query text through CLIP ViT-B/32, and compared by cosine similarity. The threshold is `settings.visual_verification_threshold = 0.20` — recalibrated from an earlier 0.26 based on a real A/B: confirmed-good matches scored 0.220-0.267, an off-topic negative control (ocean/beach footage vs. pool-chemical queries) scored 0.095-0.161. If the score is `None` (frame couldn't be extracted — e.g. a corrupt download), verification defaults to **pass** — a decode failure is treated as "unverifiable," not "wrong content." Below threshold, the candidate is deleted and the loop moves to the next-best candidate; there is no different keyword tier tried at this stage — it's purely "try the next already-scored candidate."
+
+### 4.5 Bounded dedup
+
+Any asset that wins is recorded in `used_assets[(source, source_id)] += 1` immediately after download (before the 16:9/CLIP checks even run). Because `search_clip` already excludes hits at or over `max_asset_repeat_count` (default 1) from being scored as candidates at all, the same asset cannot legitimately win for more than that many clips across one project — it silently drops out of future search results and later clips fall through to their next-best alternative instead.
+
+### 4.6 What happens when every candidate fails
+
+The escalation order, using the real function names, is:
+
+1. `search_clip`: `canva_keyword` → `fallback_keyword`, per provider (§3.1).
+2. If no provider tier produced a usable candidate at all, `_generate_semantic_keywords` fires once and its 3 phrases are tried against each remaining provider (§2.4).
+3. If **still** nothing scores ≥ `documentary_min_score` across every provider, `rank_acceptable_assets` returns an empty list, and `_resolve_clip` immediately returns a placeholder with note `"no acceptable asset found across all providers"` — no download is attempted at all in this case.
+4. If candidates *did* rank as acceptable, `_resolve_clip` downloads them best-first; each one that fails resolution normalization or CLIP verification is deleted and the next-best already-ranked candidate is tried (no new search, no new keyword tier — just the next item in the same ranked list).
+5. If every ranked candidate is exhausted this way, the clip becomes a placeholder with note `"all N acceptable candidate(s) were rejected (resolution and/or visual verification)"`, including the last specific rejection reason (e.g. `"pexels:123 failed visual verification (CLIP similarity 0.15 < 0.20)"`).
+6. Separately, if the project's overall `max_downloads` limit has been hit, any remaining clip becomes a placeholder with note `"project download limit reached"`, regardless of candidate quality — this is a project-wide budget cap, not a quality judgment.
+
+A placeholder (`_placeholder_entry`) has no `asset_path`, renders as a black segment in assembly, and carries a `note` string documenting exactly why.
+
+## 5. Worked example: clip 8, a real `pool_maintenance` project
+
+Beat, taken directly from a real generated `timeline_table.md`:
+
+> **Clip 8** — Section "pH Levels", `visual_type = "B-roll"`
+> Script beat: *"Pool pH affects how efficiently chlorine sanitizes the water."*
+> `canva_keyword = "Pool pH testing"`, `fallback_keyword = "Chemical testing pool"`
+
+**Niche resolution**: `visual_type = "B-roll"` is in neither `_HISTORICAL_TYPES` nor `_MODERN_TYPES`, so `niche_for_clip` returns `"general"` → `PROVIDER_ORDER_DEFAULT` is used, and `documentary_niche_min_assets["general"] = {"video": 2, "image": 2}`. `content_niche = "pool_maintenance"`, whose `use_archive_org=False` drops Internet Archive from the provider list.
+
+**Live re-run of the actual current code** (`search_clip`, same clip data, real Pexels/Pixabay API calls) reproduced the same winner the historical project actually picked, confirming this trace matches production behavior:
+
+```
+clip 8 -> pexels search using canva_keyword: 'Pool pH testing'
+clip 8 -> pexels contributed 5/5 raw hits as scored candidates (running total 0 -> 5)
+clip 8 -> pixabay search using canva_keyword: 'Pool pH testing'
+clip 8 -> pixabay contributed 5/5 raw hits as scored candidates (running total 5 -> 10)
+clip 8 -> pexels_images search using canva_keyword: 'Pool pH testing'
+clip 8 -> pexels_images contributed 5/5 raw hits as scored candidates (running total 10 -> 15)
+```
+
+The loop stopped after 3 providers (Pexels video, Pixabay video, Pexels images) — by that point both the video and image `_satisfied` thresholds for `"general"` were already met, so Pixabay images / Wikimedia / NASA were never queried. `canva_keyword` alone found usable results at every provider tried, so `fallback_keyword` and the semantic-fallback path were never needed.
+
+Top-ranked scored candidates (`total_score`, `semantic_similarity` from `score_asset`):
+
+| Rank | Source:ID | Score | Media | Dims | Text |
+|---|---|---|---|---|---|
+| 1 | pexels:8326251 | 76.67 | video | 3840×2160 | "experimenting with chemicals" |
+| 2 | pexels:13220695 | 75.20 | video | 3840×2160 | "puncturing ballon over swimming pool" |
+| 3 | pixabay:93705 | 73.63 | video | 2560×1440 | "swiming pool, swimming, pool, water, diving..." |
+| 4 | pexels:10187283 | 73.15 | video | 4096×2160 | "a person experimenting chemical" |
+
+None of these hit any `pool_maintenance` `banned_terms` (ocean/beach/lake/river/water park/bathtub), so all passed `_check_candidate_niche` untouched.
+
+`_resolve_clip` then downloaded rank-1 (`pexels:8326251`, 3840×2160). Since the actual probed dimensions weren't exactly the mathematically-exact 16:9 ratio, it went through `normalize_to_16_9` — `width (3840) >= height (2160)`, so it was **center-cropped** (not blur-padded) to exactly 1920×1080. It then passed CLIP verification against `"Pool pH testing"` (the real production run recorded this as accepted, no rejection note). The resulting `TimelineEntry` for clip 8 in the real project's `timeline.json`:
+
+```json
+{
+  "clip_number": 8, "start": "00:00:25", "end": "00:00:28",
+  "asset_metadata": {
+    "source": "pexels", "source_id": "8326251", "media_type": "video",
+    "width": 3840, "height": 2160, "score": 76.67
+  },
+  "placeholder": false
+}
+```
+
+No candidate was rejected for this particular clip — it's included as the "everything goes right" case. §4.6 above documents the exact fallback path that would have run instead if `pexels:8326251` had failed CLIP verification (next-best-ranked candidate, e.g. `pexels:13220695`, tried next) or if all 15 candidates had failed (placeholder with a specific last-rejection note).
+
+## 6. Known limitations
+
+Pulled directly from this codebase's own docstrings/comments/handoff notes — not invented:
+
+- **Metadata-only scoring, not real visual understanding.** `app/scoring.py::score_asset` is explicitly commented as "a heuristic scorer using metadata already returned by the provider APIs, not a real visual-content model." CLIP verification (§4.4) adds one real pixel-level check post-download, but the ranking that decides *which* candidate gets downloaded first is still text/metadata-based.
+- **CLIP threshold is an empirically-tuned approximation, not a proof.** `settings.visual_verification_threshold = 0.20` is based on "a modest real sample" (~10 controlled comparisons plus a couple of live runs, per `app/config.py`'s inline comment and `handoff.md`) — it sits between an observed good-match floor (~0.22) and an observed bad-match ceiling (~0.16), with headroom on both sides, not a provably-correct decision boundary. `handoff.md` explicitly calls out monitoring this in production and adjusting "with more data rather than re-guessing."
+- **Text-metadata niche filtering has known gaps.** `candidate_violates_niche`'s own docstring documents that it's a denylist, not an allowlist: a candidate that mentions *no* banned term at all but also has zero niche signal (e.g. an industrial pipeline valve tagged "diesel, equipment, industry" for a truck search) can slip through undetected. A stricter allowlist-style rule was tried and reverted because it broke on real, sparsely-tagged legitimate footage. When a provider returns no text metadata at all, this check cannot run for that candidate at all (`_check_candidate_niche`'s "cannot be verified pre-download" branch).
+- **Abstract-to-concrete keyword translation is prompt-based, not guaranteed.** §2.3 above shows a real generated keyword (`"Chlorine performance change"`, clip 10) that echoes the prompt's own "WRONG" pattern rather than translating it — the rule is followed most of the time, not every time.
+- **No generative fallback for exhausted candidate pools.** Per `handoff.md`, a clip that exhausts every real/stock candidate becomes a black-frame placeholder; there is no motion-graphics/AI-image fallback (flagged as a bigger, separate task, deliberately not built).
+- **Catalog depth is niche- and provider-dependent.** Internet Archive is skipped entirely for both currently-defined niches (trucks, pool_maintenance) because its catalog has "~nothing for contemporary lifestyle niches" (`app/documentary_pipeline.py` comment) — historical/archival content relies on it, everything else doesn't get it at all.
+- **No color-space normalization across providers**, per `handoff.md` — clips sourced from different providers (especially older archival scans) aren't color-matched.
+- **Sequential per-clip search by design**, not concurrent — `used_assets` dedup bookkeeping is shared mutable state across the whole run's clip loop (explicit `ponytail:` comment in `app/documentary_pipeline.py::run` flagging this as a deliberate simplification, revisit only if project size makes it a bottleneck).
+- **No silence/pause detection in narration timing** — `_force_contiguity` unconditionally removes any real gap between beats rather than detecting or preserving intentional pauses (`handoff.md`, "no evidence this is causing a visible problem in practice").

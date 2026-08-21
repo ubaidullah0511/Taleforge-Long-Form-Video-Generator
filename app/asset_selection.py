@@ -9,6 +9,7 @@ from app.clip_ingest import probe
 from app.config import settings
 from app.downloader import download
 from app.embeddings import embed
+from app.ffmpeg_utils import get_ffmpeg_path
 from app.llm_client import sample_local_frames
 from app.models import ClipRecord
 from app.scene_understanding import describe_candidate
@@ -61,7 +62,7 @@ def _normalize_to_16_9_sync(path: Path, media_type: Literal["video", "image"]) -
         f"scale={_TARGET_WIDTH}:{_TARGET_HEIGHT}:force_original_aspect_ratio=increase,"
         f"crop={_TARGET_WIDTH}:{_TARGET_HEIGHT}"
     )
-    args = ["ffmpeg", "-y", "-i", str(path), "-vf", crop_filter]
+    args = [get_ffmpeg_path(), "-y", "-i", str(path), "-vf", crop_filter]
     args += ["-frames:v", "1", "-q:v", "2"] if media_type == "image" else ["-an", "-c:v", "libx264"]
     args.append(str(tmp_dest))
     result = subprocess.run(args, capture_output=True)
@@ -87,7 +88,7 @@ def _normalize_to_16_9_with_blur_pad_sync(path: Path, media_type: Literal["video
         f"[fg]scale={_TARGET_WIDTH}:{_TARGET_HEIGHT}:force_original_aspect_ratio=decrease[fg];"
         f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
     )
-    args = ["ffmpeg", "-y", "-i", str(path), "-vf", pad_filter]
+    args = [get_ffmpeg_path(), "-y", "-i", str(path), "-vf", pad_filter]
     args += ["-frames:v", "1", "-q:v", "2"] if media_type == "image" else ["-an", "-c:v", "libx264"]
     args.append(str(tmp_dest))
     result = subprocess.run(args, capture_output=True)
@@ -161,7 +162,7 @@ async def _describe_stock_candidate(hit: StockHit, scene_text: str, scratch_dir:
         )
 
         # Checked on the actual downloaded file, not the provider's (sometimes
-        # stale/wrong) metadata, and BEFORE the Groq call so a rejected
+        # stale/wrong) metadata, and BEFORE the vision call so a rejected
         # candidate never costs a vision request. Non-16:9 sources are
         # normalized (cropped or blur-padded) rather than rejected — only an
         # unusably low resolution is a hard reject now (see normalize_to_16_9).

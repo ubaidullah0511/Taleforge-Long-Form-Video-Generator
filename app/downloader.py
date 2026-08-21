@@ -1,11 +1,18 @@
 import asyncio
 import hashlib
+import logging
+import re
 import subprocess
 from pathlib import Path
 
 import httpx
 
 from app.config import settings
+from app.ffmpeg_utils import get_ffmpeg_path
+
+logger = logging.getLogger(__name__)
+
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 
 async def download(url: str, dest_filename: str, dest_dir: Path | None = None) -> tuple[str, str]:
@@ -28,10 +35,16 @@ def _ffmpeg_trim_sync(input_arg: str, dest_path: Path, max_seconds: float) -> bo
     # -t before -i limits how much of the INPUT is read, not just the output —
     # for a network URL that means ffmpeg stops fetching once it has enough.
     result = subprocess.run(
-        ["ffmpeg", "-y", "-t", str(max_seconds), "-i", input_arg, "-c", "copy", str(dest_path)],
+        [get_ffmpeg_path(), "-y", "-t", str(max_seconds), "-i", input_arg, "-c", "copy", str(dest_path)],
         capture_output=True,
     )
-    return result.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 0
+    ok = result.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 0
+    if not ok:
+        logger.warning(
+            "downloader: ffmpeg trim failed for %r (returncode=%s): %s",
+            input_arg, result.returncode, result.stderr.decode(errors="replace")[-500:],
+        )
+    return ok
 
 
 # ponytail: subprocess.run in a thread, not asyncio.create_subprocess_exec —
@@ -52,6 +65,14 @@ async def download_video_trimmed(url: str, dest_filename: str, dest_dir: Path, m
 
     if await _ffmpeg_trim(url, dest_path, max_seconds):
         return str(dest_path)
+
+    if not _URL_SCHEME_RE.match(url):
+        # Local sources (e.g. local_library) hand us a plain filesystem path,
+        # not a fetchable URL — there's nothing to download over the network,
+        # so a failed direct trim here is a real, final failure (see the
+        # ffmpeg stderr logged in _ffmpeg_trim_sync above), not a case for
+        # the network-download fallback below.
+        raise RuntimeError(f"ffmpeg trim failed for local file {url!r}")
 
     # ponytail: some sources (odd redirects, no progressive playback) don't let
     # ffmpeg trim straight off the network — fall back to a full download first.

@@ -37,9 +37,9 @@ class StyleDecision(BaseModel):
 
 
 def _normalize(data: dict) -> StyleDecision:
-    # ponytail: Groq's json_object mode doesn't enforce an enum any more than
-    # Gemini's did (see documentary_table.assign_timings for the same issue
-    # with visual_type) — normalize instead of trusting the raw value.
+    # ponytail: json_object mode doesn't enforce an enum (see
+    # documentary_table.assign_timings for the same issue with visual_type)
+    # — normalize instead of trusting the raw value.
     pacing = data.get("pacing")
     if pacing not in _VALID_PACING:
         pacing = _DEFAULT_PACING
@@ -57,7 +57,7 @@ def _normalize(data: dict) -> StyleDecision:
 
 
 def decide_style(script: str) -> StyleDecision:
-    """Groq-driven pacing/transition/caption-emphasis decision fed into the
+    """LLM-driven pacing/transition/caption-emphasis decision fed into the
     Remotion final render. Never raises: any failure (network error, bad
     JSON, wrong types/values) falls back to hardcoded defaults so a style
     problem can never block or fail the render itself."""
@@ -65,7 +65,7 @@ def decide_style(script: str) -> StyleDecision:
         data = generate_json(STYLE_PROMPT.format(script=script), settings.llm_text_model)
         decision = _normalize(data)
     except Exception as exc:
-        logger.warning("style_decision: Groq call failed or returned invalid JSON (%s) — using defaults", exc)
+        logger.warning("style_decision: LLM call failed or returned invalid JSON (%s) — using defaults", exc)
         decision = StyleDecision()
 
     logger.info(

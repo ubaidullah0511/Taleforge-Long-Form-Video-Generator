@@ -32,6 +32,7 @@ async def search(query: str, per_page: int = 5) -> list[StockHit]:
                 width=best.get("width", 0),
                 height=best.get("height", 0),
                 duration=video.get("duration", 0),
+                text=video.get("tags", ""),
             )
         )
     return hits

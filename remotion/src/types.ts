@@ -19,6 +19,23 @@ export type ClipSegment = {
   path: string;
   startFrame: number;
   durationInFrames: number;
+  // Free-text label from app.documentary_pipeline.edit_recommendation, e.g.
+  // "slow zoom" or "film grain, dust overlay, slow zoom" — ClipLayer matches
+  // on substring, not an exact enum, since niches combine multiple cues here.
+  effect: string;
+  // "video" plays its own real motion and must never get the Ken Burns zoom
+  // on top of it; "image" (real photo, AI-generated, or a placeholder's
+  // black frame) is static and is the only mediaType the zoom applies to.
+  mediaType: "video" | "image";
+  // Per-clip fade-or-not, derived from app.documentary_pipeline.edit_recommendation's
+  // VISUAL_TYPE_EDIT_MAP (e.g. "hard cut" for Sports/Exercise Demo pacing,
+  // "dissolve" for everything else including "cross dissolve"/"fade to
+  // black"). This is the actual authority on whether THIS clip boundary
+  // fades at all — style.transitionStyle below only picks the visual flavor
+  // (fade/slide/zoom) for boundaries that do fade, it no longer blankets
+  // every clip in the video as a hard cut just because the LLM picked
+  // "hard_cut" as the overall script tone (see ClipLayer).
+  transition: "hard_cut" | "dissolve";
 };
 
 // A single caption word's frame range. When a manually-supplied voiceover

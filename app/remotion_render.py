@@ -33,6 +33,17 @@ def _to_frame(seconds: float) -> int:
     return round(seconds * _FPS)
 
 
+def _segment_transition(transition: str) -> str:
+    """Maps app.documentary_pipeline.edit_recommendation's free-text
+    per-clip transition ("cross dissolve", "fade to black", "hard cut") down
+    to the two-way choice Assembly.tsx's ClipLayer actually acts on: whether
+    THIS clip boundary fades at all. Only "hard cut" (Sports/Exercise Demo's
+    intentional pacing choice in VISUAL_TYPE_EDIT_MAP) skips the fade —
+    every other value, including a future/unrecognized one, dissolves rather
+    than risk silently hard-cutting a clip that was never meant to."""
+    return "hard_cut" if transition.strip().lower() == "hard cut" else "dissolve"
+
+
 def _build_props(
     project_dir: Path, timeline: list[TimelineEntry], style: StyleDecision,
     whisper_words: list[WordTiming] | None = None, include_captions: bool = False,
@@ -56,6 +67,13 @@ def _build_props(
             "path": rel_path,
             "startFrame": start_frame,
             "durationInFrames": max(1, end_frame - start_frame),
+            "effect": entry.recommended_effect,
+            # Real video already has its own motion — the Ken Burns "slow
+            # zoom" effect must only apply to static sources (real photos,
+            # AI-generated images, or a placeholder's black frame), never on
+            # top of playing video (see ClipLayer in Assembly.tsx).
+            "mediaType": entry.asset_metadata.media_type if entry.asset_metadata else "image",
+            "transition": _segment_transition(entry.transition),
         })
 
     total_duration_frames = (segments[-1]["startFrame"] + segments[-1]["durationInFrames"]) if segments else 0

@@ -4,241 +4,604 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>B-Roll Retrieval System</title>
-    <style>
-      :root {
-        --bg: #f4f5f7;
-        --card: #ffffff;
-        --border: #e2e4e9;
-        --text: #1f2430;
-        --muted: #6b7280;
-        --accent: #2563eb;
-        --accent-dim: #eef2ff;
-        --good: #16a34a;
-        --warn: #d97706;
-        --warn-bg: #fffbeb;
-        --code-bg: #111827;
-        --code-text: #f9fafb;
-      }
-      * { box-sizing: border-box; }
-      body {
-        font-family: -apple-system, "Segoe UI", Arial, sans-serif;
-        margin: 0;
-        padding: 24px;
-        background: var(--bg);
-        color: var(--text);
-      }
-      h1 { font-size: 1.4rem; margin: 0 0 4px; }
-      .subtitle { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; }
-
-      /* Pipeline strip */
-      .pipeline {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        align-items: center;
-        margin-bottom: 24px;
-      }
-      .pipeline .step {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 0.8rem;
-        white-space: nowrap;
-        transition: background 0.2s, border-color 0.2s;
-      }
-      .pipeline .step.active {
-        background: var(--accent-dim);
-        border-color: var(--accent);
-        font-weight: 600;
-      }
-      .pipeline .arrow { color: var(--muted); }
-
-      .card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-      }
-      .card h2 { margin-top: 0; font-size: 1.1rem; }
-      .card p.hint { color: var(--muted); font-size: 0.85rem; margin-top: -8px; }
-
-      textarea, input, select {
-        width: 100%;
-        padding: 10px;
-        margin-top: 6px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        font-family: inherit;
-        font-size: 0.9rem;
-      }
-      label { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
-      .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
-      .row > div { flex: 1; min-width: 180px; }
-
-      button {
-        padding: 10px 16px;
-        margin-top: 14px;
-        border: none;
-        border-radius: 6px;
-        background: var(--accent);
-        color: white;
-        font-weight: 600;
-        cursor: pointer;
-        font-size: 0.9rem;
-      }
-      button:disabled { background: #94a3b8; cursor: wait; }
-
-      .status { font-size: 0.85rem; margin-top: 10px; color: var(--muted); }
-      .status.error { color: #dc2626; }
-
-      table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.82rem; }
-      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-      th { color: var(--muted); font-weight: 600; background: #fafafa; }
-      tr:hover td { background: #fafbff; }
-
-      .badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 0.72rem;
-        font-weight: 600;
-      }
-      .badge.local { background: #ecfdf5; color: var(--good); }
-      .badge.pexels, .badge.pexels_video, .badge.pexels_images { background: var(--accent-dim); color: var(--accent); }
-      .badge.pixabay, .badge.pixabay_video, .badge.pixabay_images { background: #fdf4ff; color: #a21caf; }
-      .badge.internet_archive, .badge.wikimedia, .badge.nasa { background: #fef2f2; color: #b91c1c; }
-      .badge.none, .badge.placeholder { background: var(--warn-bg); color: var(--warn); }
-      .badge.yes { background: #ecfdf5; color: var(--good); }
-      .badge.no { background: #f3f4f6; color: var(--muted); }
-
-      .cards-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-        gap: 12px;
-        margin-top: 12px;
-      }
-      .clip-card {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-        font-size: 0.82rem;
-      }
-      .clip-card.placeholder { border-color: var(--warn); background: var(--warn-bg); }
-      .clip-card .clip-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-      .clip-card .clip-head strong { font-size: 0.95rem; }
-      .clip-card .time { color: var(--muted); font-size: 0.75rem; }
-      .clip-card .script { margin: 6px 0; color: var(--text); }
-      .clip-card .meta-line { color: var(--muted); font-size: 0.75rem; margin: 3px 0; }
-      .clip-card code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 0.75rem; word-break: break-all; }
-      .clip-card .alt-count { font-size: 0.72rem; color: var(--muted); }
-
-      .summary-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-      .summary-pill {
-        background: #fafafa;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 8px 14px;
-        font-size: 0.8rem;
-      }
-      .summary-pill b { font-size: 1.1rem; display: block; }
-
-      details { margin-top: 14px; }
-      details summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
-      pre {
-        white-space: pre-wrap;
-        background: var(--code-bg);
-        color: var(--code-text);
-        padding: 12px;
-        border-radius: 6px;
-        overflow: auto;
-        font-size: 0.78rem;
-        margin-top: 8px;
-      }
-      .empty-note { color: var(--muted); font-size: 0.85rem; }
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="/theme.css" />
   </head>
   <body>
-    <h1>B-Roll Retrieval System</h1>
-    <p class="subtitle">Two pipelines: per-scene B-roll matching (/process-script) and the full documentary visual research pipeline (/generate-documentary-timeline).</p>
+    <h1>Taleforge</h1>
+    <p class="subtitle">Documentary visual research pipeline (/generate-documentary-timeline).</p>
 
     <div class="pipeline" id="docPipelineStrip">
-      <div class="step" data-stage="input">1. Script Input</div>
+      <div class="step" data-stage="input"><span class="step-fill"></span><span class="step-label">1. Script Input</span></div>
       <span class="arrow">&rarr;</span>
-      <div class="step" data-stage="table">2. Table Generation (LLM)</div>
+      <div class="step" data-stage="table"><span class="step-fill"></span><span class="step-label">2. Table Generation (LLM)</span></div>
       <span class="arrow">&rarr;</span>
-      <div class="step" data-stage="search">3. Asset Search (7 providers)</div>
+      <div class="step" data-stage="search"><span class="step-fill"></span><span class="step-label">3. Asset Search (7 providers)</span></div>
       <span class="arrow">&rarr;</span>
-      <div class="step" data-stage="score">4. Scoring &amp; Dedup</div>
+      <div class="step" data-stage="score"><span class="step-fill"></span><span class="step-label">4. Scoring, Niche Filter &amp; Visual Verification (CLIP)</span></div>
       <span class="arrow">&rarr;</span>
-      <div class="step" data-stage="download">5. Download</div>
+      <div class="step" data-stage="download"><span class="step-fill"></span><span class="step-label">5. Download</span></div>
       <span class="arrow">&rarr;</span>
-      <div class="step" data-stage="timeline">6. Timeline Output</div>
+      <div class="step" data-stage="timeline"><span class="step-fill"></span><span class="step-label">6. Timeline Output</span></div>
     </div>
 
-    <div class="card">
-      <h2>Process Script <span style="color: var(--muted); font-weight: normal; font-size: 0.8rem;">(one best clip per scene)</span></h2>
-      <p class="hint">Splits the script into scenes and picks the single best-matching clip for each, from the local library or Pexels/Pixabay.</p>
-      <textarea id="processInput" rows="6" placeholder="Enter raw data or script"></textarea>
-      <div class="row">
-        <div>
-          <label>Use field</label>
-          <select id="processField">
-            <option value="script">script</option>
-            <option value="raw_data">raw_data</option>
+    <div class="prompt-shell">
+      <input id="projectName" class="project-name-mini" placeholder="Untitled project — click to name it" />
+
+      <div class="prompt-box">
+        <textarea id="timelineInput" class="prompt-textarea" rows="4" placeholder="Enter your narration script..."></textarea>
+        <div class="prompt-box-footer">
+          <div class="attach-group">
+            <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('audioFile').click()" title="Attach voiceover audio (optional — real Whisper timing instead of the word-count estimate)">Add voice file</button>
+            <input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a" onchange="updateAttachedFile()" hidden />
+            <span class="attach-filename" id="attachFilename"></span>
+          </div>
+          <div class="niche-select-group">
+            <div class="custom-select" id="nicheSelectWrap">
+              <button type="button" class="custom-select-trigger niche-select" id="nicheTrigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="custom-select-label"></span>
+                <span class="custom-select-caret">&#9662;</span>
+              </button>
+              <ul class="custom-select-options" role="listbox" hidden></ul>
+              <select id="contentNiche" hidden>
+                <option value="trucks">Trucks</option>
+                <option value="pool_maintenance">Pool Maintenance</option>
+                <option value="bodybuilding">Bodybuilding</option>
+                <option value="prison">Prison</option>
+              </select>
+            </div>
+            <div class="custom-select multi-select" id="subNicheSelectWrap" hidden>
+              <button type="button" class="custom-select-trigger sub-niche-select" id="subNicheTrigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="custom-select-label">Select niches...</span>
+                <span class="custom-select-caret">&#9662;</span>
+              </button>
+              <div class="custom-select-options multi-select-options" id="subNicheOptions" hidden>
+                <div class="multi-select-actions">
+                  <button type="button" class="multi-select-link" id="subNicheSelectAll">Select all</button>
+                  <button type="button" class="multi-select-link" id="subNicheClearAll">Clear all</button>
+                </div>
+                <ul class="multi-select-list" id="subNicheList" role="listbox" aria-multiselectable="true"></ul>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="attach-btn" id="addNicheToggleBtn" title="Add a new niche category">+ Niche</button>
+          <button type="button" class="attach-btn" id="manageNichesToggleBtn" title="Sync local library, rename, or delete a custom niche">Manage Niches</button>
+        </div>
+        <div class="chips-row" id="subNichePills" hidden></div>
+        <div class="source-toggles" id="addNicheRow" hidden>
+          <input type="text" id="newNicheName" class="project-name-mini" placeholder="e.g. Tennis" style="margin:0; text-align:left;" />
+          <select id="newNicheParent" class="project-name-mini" style="margin:0;" title="Optional — narrows the new niche within an existing one">
+            <option value="">None — top-level niche</option>
+          </select>
+          <button type="button" class="attach-btn" id="addNicheConfirmBtn" onclick="submitNewNiche()">Add</button>
+          <span class="attach-filename" id="addNicheNote">This creates a starting configuration — review/refine it after generating your first video in this niche.</span>
+        </div>
+        <div class="niche-manage-panel" id="manageNichesRow" hidden>
+          <div class="niche-manage-list" id="manageNichesList"></div>
+        </div>
+        <div class="source-toggles" id="sourceToggles">
+          <label class="source-toggle" title="Search the AI-generated images">
+            <input type="checkbox" id="enableAiGeneration" checked /> AI-generated images
+          </label>
+          <label class="source-toggle" title="Search the curated local footage library">
+            <input type="checkbox" id="enableLocalLibrary" checked /> Local library
+          </label>
+          <label class="source-toggle" title="Search Pexels/Pixabay/Coverr/NASA/Archive.org">
+            <input type="checkbox" id="enableStockProviders" checked /> Stock providers
+          </label>
+        </div>
+      </div>
+
+      <div class="prompt-actions">
+        <div class="custom-select" id="runModeSelectWrap">
+          <button type="button" class="custom-select-trigger run-mode-select" id="runModeTrigger" aria-haspopup="listbox" aria-expanded="false" title="What Run should do">
+            <span class="custom-select-label"></span>
+            <span class="custom-select-caret">&#9662;</span>
+          </button>
+          <ul class="custom-select-options" role="listbox" hidden></ul>
+          <select id="runMode" hidden>
+            <option value="edit" selected>Generate &amp; Edit</option>
+            <option value="full">Generate Full Video</option>
           </select>
         </div>
+        <button id="timelineBtn" onclick="runTimeline()">Run</button>
       </div>
-      <button id="processBtn" onclick="runProcessScript()">Run</button>
-      <div class="status" id="processStatus"></div>
-      <div id="processResults"></div>
     </div>
 
-    <div class="card">
-      <h2>Generate Documentary Timeline <span style="color: var(--muted); font-weight: normal; font-size: 0.8rem;">(full research pipeline)</span></h2>
-      <p class="hint">Runs all 6 pipeline stages above: table generation, multi-provider search, scoring, dedup, parallel download, and timeline/table output on disk.</p>
-      <textarea id="timelineInput" rows="6" placeholder="Enter raw narration script (ignored if a script file is uploaded below)"></textarea>
-      <div class="row">
-        <div>
-          <label>Script file (.txt, optional — overrides the textarea)</label>
-          <input id="scriptFile" type="file" accept=".txt,text/plain" />
-        </div>
-        <div>
-          <label>Voiceover recording (optional — real Whisper timing instead of the word-count estimate)</label>
-          <input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a" />
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label>Project name</label>
-          <input id="projectName" placeholder="optional" />
-        </div>
-        <div>
-          <label>Allow duplicate assets</label>
-          <input id="allowDuplicates" type="checkbox" />
-        </div>
-        <div>
-          <label>Max downloads</label>
-          <input id="maxDownloads" type="number" min="0" placeholder="optional" />
-        </div>
-      </div>
-      <button id="timelineBtn" onclick="runTimeline()">Run</button>
-      <div class="status" id="timelineStatus"></div>
-      <div id="timelineResults"></div>
-    </div>
+    <div class="status" id="timelineStatus"></div>
+    <div id="timelineResults"></div>
 
     <script>
+      // Native <select>/<option> popups fall back to OS/browser default
+      // rendering in most browsers regardless of page CSS (low-contrast gray
+      // text was the actual reported bug) — this drives a custom-styled
+      // dropdown off a real, hidden <select> instead, so every existing
+      // `document.getElementById(id).value` read elsewhere (runTimeline(),
+      // etc.) keeps working completely unmodified; only the visible picker
+      // UI changes. Generic so it could back another dropdown later, but
+      // only the category selector uses it today.
+      // Populated by makeCustomSelect() below, keyed by wrapId — lets code
+      // outside this closure (submitNewNiche()) refresh a custom select's
+      // visible list/label after mutating its backing <select> directly,
+      // without duplicating render()'s option/label sync logic.
+      const customSelectRenders = {};
+
+      function makeCustomSelect(wrapId) {
+        const wrap = document.getElementById(wrapId);
+        const trigger = wrap.querySelector(".custom-select-trigger");
+        const label = wrap.querySelector(".custom-select-label");
+        const list = wrap.querySelector(".custom-select-options");
+        const nativeSelect = wrap.querySelector("select");
+
+        function render() {
+          list.innerHTML = "";
+          Array.from(nativeSelect.options).forEach((opt) => {
+            const li = document.createElement("li");
+            li.textContent = opt.textContent;
+            li.setAttribute("role", "option");
+            li.className = opt.value === nativeSelect.value ? "selected" : "";
+            li.addEventListener("click", () => {
+              nativeSelect.value = opt.value;
+              nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+              label.textContent = opt.textContent;
+              close();
+            });
+            list.appendChild(li);
+          });
+          const selected = nativeSelect.options[nativeSelect.selectedIndex];
+          label.textContent = selected ? selected.textContent : "";
+        }
+
+        function open() {
+          render();
+          list.hidden = false;
+          trigger.setAttribute("aria-expanded", "true");
+        }
+        function close() {
+          list.hidden = true;
+          trigger.setAttribute("aria-expanded", "false");
+        }
+
+        trigger.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (list.hidden) open(); else close();
+        });
+        document.addEventListener("click", (e) => { if (!wrap.contains(e.target)) close(); });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+        render();
+        customSelectRenders[wrapId] = render;
+      }
+
+      makeCustomSelect("nicheSelectWrap");
+      makeCustomSelect("runModeSelectWrap");
+
+      // childrenByParent[categoryKey] -> [{key, display_name, parent_key}, ...]
+      // for that category's sub-niches, rebuilt on every loadNiches() call.
+      // Drives the second (multi-select) dropdown: a category with no entry
+      // here has no sub-niches, so that dropdown never renders for it.
+      let childrenByParent = {};
+      // Selected sub-niche keys for whichever category is currently chosen —
+      // always reset when the category changes (see updateSubNicheDropdown).
+      let selectedSubNiches = new Set();
+
+      // Rebuilds the category dropdown (Level 1, top-level niches only), the
+      // sub-niche multi-select (Level 2, driven by childrenByParent), and the
+      // "Add Niche" parent picker, from the live server-side registry
+      // (built-in + custom_niches.json) — called on page load and after
+      // adding a niche, so newly-added or previously-persisted custom niches
+      // actually show up instead of only the 4 hardcoded <option>s baked into
+      // this file.
+      async function loadNiches(selectKey) {
+        let niches;
+        try {
+          const res = await fetch("/niches");
+          if (!res.ok) throw new Error(`Error ${res.status}`);
+          niches = await res.json();
+        } catch (err) {
+          return; // Keep the hardcoded fallback options if the fetch fails.
+        }
+
+        lastNiches = niches;
+        renderManageNichesPanel();
+
+        const nichesByKey = Object.fromEntries(niches.map((n) => [n.key, n]));
+        childrenByParent = {};
+        niches.forEach((n) => {
+          if (n.parent_key && nichesByKey[n.parent_key]) {
+            (childrenByParent[n.parent_key] = childrenByParent[n.parent_key] || []).push(n);
+          }
+        });
+        // A niche whose parent_key points at nothing live (deleted parent) is
+        // treated as top-level too — matches sorted_niches()'s own fallback.
+        const topLevel = niches.filter((n) => !n.parent_key || !nichesByKey[n.parent_key]);
+
+        const nicheSelect = document.getElementById("contentNiche");
+        const prevValue = selectKey || nicheSelect.value;
+        nicheSelect.innerHTML = "";
+        topLevel.forEach((n) => {
+          nicheSelect.appendChild(new Option(n.display_name, n.key));
+        });
+        if (topLevel.some((n) => n.key === prevValue)) nicheSelect.value = prevValue;
+        customSelectRenders.nicheSelectWrap();
+        updateSubNicheDropdown();
+
+        const parentSelect = document.getElementById("newNicheParent");
+        const prevParent = parentSelect.value;
+        parentSelect.innerHTML = "";
+        parentSelect.appendChild(new Option("None — top-level niche", ""));
+        niches.forEach((n) => {
+          parentSelect.appendChild(new Option(n.parent_key ? `— ${n.display_name}` : n.display_name, n.key));
+        });
+        if (niches.some((n) => n.key === prevParent)) parentSelect.value = prevParent;
+      }
+
+      // Level 2: shows/hides and repopulates the sub-niche multi-select for
+      // whichever category is currently selected. Always clears the prior
+      // selection — switching categories mid-pick shouldn't carry stale
+      // sub-niche keys from a now-hidden dropdown into the payload.
+      function updateSubNicheDropdown() {
+        const category = document.getElementById("contentNiche").value;
+        const children = childrenByParent[category] || [];
+        selectedSubNiches = new Set();
+        renderSubNicheList(children);
+        renderSubNichePills(children);
+        const wrap = document.getElementById("subNicheSelectWrap");
+        const wasHidden = wrap.hidden;
+        wrap.hidden = children.length === 0;
+        if (!wrap.hidden && wasHidden) {
+          wrap.classList.remove("fade-in");
+          void wrap.offsetWidth; // restart the animation if it was already shown for a previous category
+          wrap.classList.add("fade-in");
+        }
+        document.getElementById("subNicheOptions").hidden = true;
+        document.getElementById("subNicheTrigger").setAttribute("aria-expanded", "false");
+      }
+      document.getElementById("contentNiche").addEventListener("change", updateSubNicheDropdown);
+
+      function renderSubNicheList(children) {
+        const list = document.getElementById("subNicheList");
+        list.innerHTML = children.map((n) => `
+          <li class="multi-select-item${selectedSubNiches.has(n.key) ? " selected" : ""}"
+              role="option" aria-selected="${selectedSubNiches.has(n.key)}" data-key="${n.key}">
+            <span class="multi-select-checkbox"></span><span>${escapeHtml(n.display_name)}</span>
+          </li>`).join("");
+        list.querySelectorAll(".multi-select-item").forEach((li) => {
+          li.addEventListener("click", (e) => {
+            // Must stop this from bubbling to document's outside-click
+            // listener (see initSubNicheDropdown): renderSubNicheList()
+            // below rebuilds #subNicheList's innerHTML, which detaches the
+            // very <li> that was clicked (e.target) from the DOM. If the
+            // click were allowed to keep bubbling, wrap.contains(e.target)
+            // would evaluate against that now-detached node and incorrectly
+            // read as "outside," closing the dropdown on every single toggle.
+            e.stopPropagation();
+            const key = li.dataset.key;
+            if (selectedSubNiches.has(key)) selectedSubNiches.delete(key); else selectedSubNiches.add(key);
+            renderSubNicheList(children);
+            renderSubNichePills(children);
+          });
+        });
+        const label = document.querySelector("#subNicheSelectWrap .custom-select-label");
+        const trigger = document.getElementById("subNicheTrigger");
+        label.textContent = selectedSubNiches.size > 0 ? `${selectedSubNiches.size} selected` : "Select niches...";
+        trigger.classList.toggle("has-selection", selectedSubNiches.size > 0);
+      }
+
+      // Pills below both dropdowns (reuses the .chip/.chip-accent styling
+      // already used elsewhere, e.g. editor.html's summary chips) with a ×
+      // remove button per pill. Removal plays a brief scale/opacity-out
+      // transition (see .chip-removable.removing in theme.css) before the
+      // key actually leaves the Set and the row re-renders without it.
+      function renderSubNichePills(children) {
+        const row = document.getElementById("subNichePills");
+        const byKey = Object.fromEntries(children.map((n) => [n.key, n]));
+        const keys = Array.from(selectedSubNiches);
+        row.hidden = keys.length === 0;
+        row.innerHTML = keys.map((key) => `
+          <span class="chip chip-accent chip-removable" data-key="${key}">
+            ${escapeHtml(byKey[key] ? byKey[key].display_name : key)}
+            <button type="button" class="chip-remove" data-key="${key}" aria-label="Remove ${escapeHtml(byKey[key] ? byKey[key].display_name : key)}">&times;</button>
+          </span>`).join("");
+        row.querySelectorAll(".chip-remove").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const pill = btn.closest(".chip-removable");
+            pill.classList.add("removing");
+            setTimeout(() => {
+              selectedSubNiches.delete(btn.dataset.key);
+              renderSubNicheList(children);
+              renderSubNichePills(children);
+            }, 150);
+          });
+        });
+      }
+
+      // Sub-niche dropdown open/close: deliberately NOT makeCustomSelect()
+      // (that pattern closes on every item click, which would defeat
+      // multi-select) — stays open across item toggles, closes only on
+      // click-outside or Escape, same as the category dropdown otherwise.
+      (function initSubNicheDropdown() {
+        const wrap = document.getElementById("subNicheSelectWrap");
+        const trigger = document.getElementById("subNicheTrigger");
+        const options = document.getElementById("subNicheOptions");
+        trigger.addEventListener("click", (e) => {
+          e.stopPropagation();
+          options.hidden = !options.hidden;
+          trigger.setAttribute("aria-expanded", String(!options.hidden));
+        });
+        document.addEventListener("click", (e) => {
+          if (!wrap.contains(e.target)) {
+            options.hidden = true;
+            trigger.setAttribute("aria-expanded", "false");
+          }
+        });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { options.hidden = true; trigger.setAttribute("aria-expanded", "false"); }
+        });
+        document.getElementById("subNicheSelectAll").addEventListener("click", () => {
+          const children = childrenByParent[document.getElementById("contentNiche").value] || [];
+          children.forEach((n) => selectedSubNiches.add(n.key));
+          renderSubNicheList(children);
+          renderSubNichePills(children);
+        });
+        document.getElementById("subNicheClearAll").addEventListener("click", () => {
+          selectedSubNiches.clear();
+          const children = childrenByParent[document.getElementById("contentNiche").value] || [];
+          renderSubNicheList(children);
+          renderSubNichePills(children);
+        });
+      })();
+
+      // The actual generation-payload value for the niche picker: selecting
+      // one or more sub-niches sends that array (multi-select, see
+      // app.niches.resolve_sub_niches); with none selected, the plain
+      // category key is sent, unchanged from today's single-select behavior.
+      function getSelectedContentNiche() {
+        return selectedSubNiches.size > 0 ? Array.from(selectedSubNiches) : document.getElementById("contentNiche").value;
+      }
+
+      // Full niche list from the last loadNiches() call — reused by the
+      // "Manage Niches" panel so it doesn't need its own fetch.
+      let lastNiches = [];
+
+      loadNiches();
+
+      document.getElementById("addNicheToggleBtn").addEventListener("click", () => {
+        const row = document.getElementById("addNicheRow");
+        row.hidden = !row.hidden;
+        if (!row.hidden) document.getElementById("newNicheName").focus();
+      });
+
+      // "Manage Niches" panel: sync-library/rename/delete for CUSTOM niches
+      // only (built-in trucks/pool_maintenance/bodybuilding/prison are never
+      // listed here — is_custom comes straight from GET /niches).
+      document.getElementById("manageNichesToggleBtn").addEventListener("click", () => {
+        const row = document.getElementById("manageNichesRow");
+        row.hidden = !row.hidden;
+      });
+
+      function renderManageNichesPanel() {
+        const list = document.getElementById("manageNichesList");
+        const customNiches = lastNiches.filter((n) => n.is_custom);
+        if (customNiches.length === 0) {
+          list.innerHTML = `<span class="attach-filename">No custom niches yet — add one with "+ Niche" above.</span>`;
+          return;
+        }
+        list.innerHTML = customNiches.map((n) => `
+          <div class="niche-manage-row" data-key="${n.key}">
+            <span class="niche-manage-name">${escapeHtml(n.display_name)}</span>
+            <button type="button" class="attach-btn" data-action="sync" data-key="${n.key}"
+              ${n.local_library_path ? "" : "disabled"}
+              title="${n.local_library_path ? "Index any new clips dropped into this niche's local library folder" : "No local library folder linked to this niche"}">Sync Library</button>
+            <button type="button" class="attach-btn niche-sync-stop" data-action="stop-sync" data-key="${n.key}" hidden>Stop</button>
+            <button type="button" class="attach-btn" data-action="rename" data-key="${n.key}">Rename</button>
+            <button type="button" class="attach-btn" data-action="delete" data-key="${n.key}">Delete</button>
+            <span class="attach-filename niche-manage-status" data-status-for="${n.key}"></span>
+          </div>`).join("");
+        list.querySelectorAll(".niche-manage-row button[data-action]").forEach((btn) => {
+          btn.addEventListener("click", () => handleManageNicheAction(btn.dataset.action, btn.dataset.key));
+        });
+      }
+
+      async function handleManageNicheAction(action, key) {
+        const niche = lastNiches.find((n) => n.key === key);
+        const statusEl = document.querySelector(`.niche-manage-status[data-status-for="${key}"]`);
+
+        const syncBtn = document.querySelector(`button[data-action="sync"][data-key="${key}"]`);
+        const stopBtn = document.querySelector(`button[data-action="stop-sync"][data-key="${key}"]`);
+
+        if (action === "sync") {
+          statusEl.textContent = "Syncing...";
+          syncBtn.disabled = true;
+          try {
+            const res = await fetch(`/niches/${encodeURIComponent(key)}/sync-library`, { method: "POST" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+            stopBtn.hidden = false;
+            pollSyncProgress(data.sync_key, statusEl, syncBtn, stopBtn);
+          } catch (err) {
+            statusEl.textContent = `Sync failed: ${err.message || err}`;
+            syncBtn.disabled = false;
+          }
+          return;
+        }
+
+        if (action === "stop-sync") {
+          stopBtn.disabled = true;
+          statusEl.textContent = "Stopping — finishing current file...";
+          try {
+            const res = await fetch(`/niches/${encodeURIComponent(key)}/sync-library/stop`, { method: "POST" });
+            if (!res.ok) {
+              const data = await res.json();
+              throw new Error(data.detail || `Error ${res.status}`);
+            }
+          } catch (err) {
+            statusEl.textContent = `Stop failed: ${err.message || err}`;
+            stopBtn.disabled = false;
+          }
+          return;
+        }
+
+        if (action === "rename") {
+          const newName = window.prompt("New display name:", niche ? niche.display_name : "");
+          if (!newName || !newName.trim() || newName.trim() === (niche && niche.display_name)) return;
+          try {
+            const res = await fetch(`/niches/${encodeURIComponent(key)}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ display_name: newName.trim() }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+            await loadNiches();
+          } catch (err) {
+            statusEl.textContent = `Rename failed: ${err.message || err}`;
+          }
+          return;
+        }
+
+        if (action === "delete") {
+          const label = niche ? niche.display_name : key;
+          if (!window.confirm(`Delete niche "${label}"? This removes the niche configuration only — footage on disk is kept.`)) return;
+          try {
+            const res = await fetch(`/niches/${encodeURIComponent(key)}`, { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+            await loadNiches();
+          } catch (err) {
+            statusEl.textContent = `Delete failed: ${err.message || err}`;
+          }
+        }
+      }
+
+      // Polls GET /progress/{sync_key} (see POST /niches/{key}/sync-library
+      // in app/main.py, which runs the actual indexing as a background task
+      // rather than blocking the request) so the Stop button stays clickable
+      // while a sync is in progress. Recursive setTimeout, same pattern as
+      // pollProgress() above, so a slow poll response can't stack up
+      // overlapping requests.
+      function pollSyncProgress(syncKey, statusEl, syncBtn, stopBtn) {
+        const POLL_MS = 1000;
+
+        async function tick() {
+          let response;
+          try {
+            response = await fetch(`/progress/${encodeURIComponent(syncKey)}`);
+          } catch (err) {
+            statusEl.textContent = `Sync progress check failed: ${err}`;
+            syncBtn.disabled = false;
+            stopBtn.hidden = true;
+            return;
+          }
+          if (!response.ok) {
+            statusEl.textContent = `Sync progress check failed: ${response.status}`;
+            syncBtn.disabled = false;
+            stopBtn.hidden = true;
+            return;
+          }
+          const data = await response.json();
+          if (!data.done) {
+            setTimeout(tick, POLL_MS);
+            return;
+          }
+
+          syncBtn.disabled = false;
+          stopBtn.hidden = true;
+          stopBtn.disabled = false;
+          if (data.error) {
+            statusEl.textContent = `Sync failed: ${data.error}`;
+            return;
+          }
+          const result = data.result || {};
+          statusEl.textContent = result.stopped
+            ? `Stopped — ${result.indexed_new} of ${result.total_new} files indexed`
+            : result.indexed_new > 0
+              ? `${result.indexed_new} new clip${result.indexed_new === 1 ? "" : "s"} indexed`
+              : "No new clips found";
+        }
+
+        tick();
+      }
+
+      async function submitNewNiche() {
+        const nameInput = document.getElementById("newNicheName");
+        const name = nameInput.value.trim();
+        const parentKey = document.getElementById("newNicheParent").value || null;
+        const confirmBtn = document.getElementById("addNicheConfirmBtn");
+        const note = document.getElementById("addNicheNote");
+        if (!name) return;
+
+        confirmBtn.disabled = true;
+        note.textContent = "Generating niche configuration...";
+        try {
+          const response = await fetch("/niches", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, parent_key: parentKey }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || `Error ${response.status}`);
+
+          await loadNiches(data.key);
+
+          nameInput.value = "";
+          document.getElementById("addNicheRow").hidden = true;
+        } catch (err) {
+          note.textContent = `Failed to add niche: ${err.message || err}`;
+          return;
+        } finally {
+          confirmBtn.disabled = false;
+        }
+        note.textContent = "This creates a starting configuration — review/refine it after generating your first video in this niche.";
+      }
+
       function escapeHtml(value) {
         return String(value ?? "").replace(/[&<>"']/g, (c) => (
           { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
         ));
       }
 
-      function setStage(stage) {
+      // Same 6 stages both Run modes report through app/progress.py — Mode A
+      // ("Generate & Edit") just returns once "timeline" finishes instead of
+      // also paying for Remotion/audio-mux, so this list needs no changes
+      // for that.
+      const STAGE_ORDER = ["input", "table", "search", "score", "download", "timeline"];
+
+      // Visual treatment for the pipeline strip: every stage before the
+      // current one reads as solid-filled ("complete"), the current stage
+      // fills proportionally to current/total when the backend reports a
+      // per-clip count (search/score/download), or shimmers indeterminately
+      // when it doesn't (input/table/timeline have no per-item count), and
+      // every stage after stays empty.
+      function updateStageProgress(stage, current, total) {
+        const stageIndex = STAGE_ORDER.indexOf(stage);
         document.querySelectorAll("#docPipelineStrip .step").forEach((el) => {
-          el.classList.toggle("active", el.dataset.stage === stage);
+          const idx = STAGE_ORDER.indexOf(el.dataset.stage);
+          const fill = el.querySelector(".step-fill");
+          el.classList.remove("active", "complete", "has-progress");
+          if (idx < 0 || stageIndex < 0) return;
+          if (idx < stageIndex) {
+            el.classList.add("complete");
+            if (fill) fill.style.width = "100%";
+          } else if (idx === stageIndex) {
+            el.classList.add("active");
+            if (fill) {
+              if (current && total) {
+                el.classList.add("has-progress");
+                fill.style.width = `${Math.min(100, (current / total) * 100)}%`;
+              } else {
+                fill.style.width = "100%";
+              }
+            }
+          } else if (fill) {
+            fill.style.width = "0%";
+          }
         });
+      }
+
+      function setStage(stage) {
+        updateStageProgress(stage, null, null);
       }
 
       async function callApi(url, body, statusEl, button) {
@@ -256,7 +619,7 @@
 
       async function sendRequest(url, statusEl, button, fetchOptions) {
         statusEl.className = "status";
-        statusEl.textContent = "Running...";
+        statusEl.textContent = "Starting...";
         button.disabled = true;
         try {
           const response = await fetch(url, { method: "POST", ...fetchOptions });
@@ -270,95 +633,182 @@
           if (!response.ok) {
             statusEl.className = "status error";
             statusEl.textContent = `Error ${response.status}: ${data.detail || raw}`;
+            button.disabled = false;
             return null;
           }
-          statusEl.textContent = "Done.";
+          // Button stays disabled — pollProgress() below re-enables it once
+          // the background job actually finishes (or errors out).
           return data;
         } catch (err) {
           statusEl.className = "status error";
           statusEl.textContent = `Request failed: ${err}`;
-          return null;
-        } finally {
           button.disabled = false;
+          return null;
         }
       }
 
-      async function runProcessScript() {
-        const input = document.getElementById("processInput").value;
-        const field = document.getElementById("processField").value;
-        const body = { [field]: input };
-        const statusEl = document.getElementById("processStatus");
-        const button = document.getElementById("processBtn");
+      // Kickoff (POST /generate-documentary-timeline*) now returns
+      // {project_name} immediately instead of the full result — the pipeline
+      // runs as a FastAPI background task (see app/main.py) and reports
+      // progress via GET /progress/{project_name}, which this polls every
+      // second until done. Recursive setTimeout, not setInterval, so a slow
+      // poll response can't stack up overlapping requests.
+      //
+      // redirectToEditor: set only for Run mode "edit" ("Generate & Edit") —
+      // on completion this sends the browser straight to /editor/{project}
+      // instead of rendering results on this page, matching Mode B's
+      // (unchanged) "stay here and show results" behavior.
+      function pollProgress(projectName, statusEl, button, redirectToEditor) {
+        const POLL_MS = 1000;
 
-        const data = await callApi("/process-script", body, statusEl, button);
-        renderProcessResults(data);
-      }
+        async function tick() {
+          let response;
+          try {
+            response = await fetch(`/progress/${encodeURIComponent(projectName)}`);
+          } catch (err) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Progress check failed: ${err}`;
+            button.disabled = false;
+            return;
+          }
+          if (!response.ok) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Progress check failed: ${response.status}`;
+            button.disabled = false;
+            return;
+          }
+          const data = await response.json();
 
-      function renderProcessResults(scenes) {
-        const container = document.getElementById("processResults");
-        if (!scenes) { container.innerHTML = ""; return; }
-        if (scenes.length === 0) {
-          container.innerHTML = '<p class="empty-note">No scenes returned.</p>';
-          return;
+          updateStageProgress(data.stage, data.current, data.total);
+          const counter = data.current && data.total ? ` (${data.current}/${data.total})` : "";
+          statusEl.className = "status";
+          statusEl.textContent = `${data.detail || "Working..."}${counter}`;
+
+          if (!data.done) {
+            setTimeout(tick, POLL_MS);
+            return;
+          }
+
+          button.disabled = false;
+          if (data.error) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Error: ${data.error}`;
+            return;
+          }
+
+          if (redirectToEditor) {
+            statusEl.textContent = "Done — opening editor...";
+            window.location.href = `/editor/${encodeURIComponent(projectName)}`;
+            return;
+          }
+
+          statusEl.textContent = "Done.";
+          renderTimelineResults(data.result);
         }
-        const rows = scenes.map((s) => `
-          <tr>
-            <td>${s.scene}</td>
-            <td>${escapeHtml(s.script)}</td>
-            <td><span class="badge ${escapeHtml(s.source)}">${escapeHtml(s.source)}</span></td>
-            <td>${s.selected_clip ? `<code>${escapeHtml(s.selected_clip)}</code>` : "&mdash;"}</td>
-            <td>${s.similarity != null ? s.similarity.toFixed(2) : "&mdash;"}</td>
-            <td><span class="badge ${s.downloaded ? "yes" : "no"}">${s.downloaded ? "yes" : "no"}</span></td>
-            <td><span class="badge ${s.cached ? "yes" : "no"}">${s.cached ? "yes" : "no"}</span></td>
-          </tr>`).join("");
-        container.innerHTML = `
-          <table>
-            <thead><tr><th>Scene</th><th>Script</th><th>Source</th><th>Clip</th><th>Similarity</th><th>Downloaded</th><th>Cached</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <details>
-            <summary>Raw JSON</summary>
-            <pre>${escapeHtml(JSON.stringify(scenes, null, 2))}</pre>
-          </details>`;
+
+        tick();
       }
+
+      // Reflects the attached voiceover file (chosen via the prompt box's
+      // "+" button, which just proxies a click to this hidden file input)
+      // next to that button, and flags it visually via .has-file.
+      function updateAttachedFile() {
+        const file = document.getElementById("audioFile").files[0];
+        const label = document.getElementById("attachFilename");
+        const btn = document.getElementById("attachBtn");
+        label.textContent = file ? file.name : "";
+        btn.classList.toggle("has-file", Boolean(file));
+        btn.title = file
+          ? `Voiceover: ${file.name} (click to change)`
+          : "Attach voiceover audio (optional — real Whisper timing instead of the word-count estimate)";
+      }
+
+      // Run mode picks which pipeline entry point runs, via a distinct
+      // endpoint pair (see app/main.py):
+      //   "edit" -> /generate-documentary-timeline/edit(/upload) — stops
+      //     after asset resolution + per-clip segment render, then
+      //     pollProgress() redirects straight to the editor.
+      //   "full" -> /generate-documentary-timeline(/upload) — today's
+      //     unchanged full pipeline (+ Remotion render + audio mux),
+      //     results shown on this page as before.
+      // Live-disables Run (with an explanatory message) whenever all 3
+      // footage-source checkboxes are unchecked — every clip would become a
+      // placeholder, which is a mistake to fall into silently rather than a
+      // real intent, so it's blocked here instead of only warned about after
+      // the run finishes.
+      function updateSourceToggleGuard() {
+        const anyEnabled = document.getElementById("enableAiGeneration").checked
+          || document.getElementById("enableLocalLibrary").checked
+          || document.getElementById("enableStockProviders").checked;
+        const button = document.getElementById("timelineBtn");
+        const statusEl = document.getElementById("timelineStatus");
+        button.disabled = !anyEnabled;
+        if (!anyEnabled) {
+          statusEl.className = "status error";
+          statusEl.textContent = "Enable at least one footage source (AI-generated images, local library, or stock providers) before running — with all 3 off, every clip would become a placeholder.";
+        } else if (statusEl.classList.contains("error")) {
+          statusEl.className = "status";
+          statusEl.textContent = "";
+        }
+      }
+      document.getElementById("sourceToggles").addEventListener("change", updateSourceToggleGuard);
+      updateSourceToggleGuard();
 
       async function runTimeline() {
         const input = document.getElementById("timelineInput").value;
         const projectName = document.getElementById("projectName").value;
-        const allowDuplicates = document.getElementById("allowDuplicates").checked;
-        const maxDownloads = document.getElementById("maxDownloads").value;
-        const scriptFile = document.getElementById("scriptFile").files[0];
+        const contentNiche = getSelectedContentNiche();
         const audioFile = document.getElementById("audioFile").files[0];
+        const mode = document.getElementById("runMode").value;
+        const enableAiGeneration = document.getElementById("enableAiGeneration").checked;
+        const enableLocalLibrary = document.getElementById("enableLocalLibrary").checked;
+        const enableStockProviders = document.getElementById("enableStockProviders").checked;
 
         const statusEl = document.getElementById("timelineStatus");
         const button = document.getElementById("timelineBtn");
 
+        if (!enableAiGeneration && !enableLocalLibrary && !enableStockProviders) {
+          updateSourceToggleGuard();
+          return;
+        }
+
         setStage("input");
-        await new Promise((r) => setTimeout(r, 150));
-        setStage("table");
+
+        const basePath = mode === "edit" ? "/generate-documentary-timeline/edit" : "/generate-documentary-timeline";
 
         let data;
-        if (scriptFile || audioFile) {
+        if (audioFile) {
           // Uploading a file requires multipart/form-data — a different
           // endpoint (JSON and File/Form params can't share one FastAPI route).
           const formData = new FormData();
           formData.append("script", input);
           if (projectName) formData.append("project_name", projectName);
-          if (allowDuplicates) formData.append("allow_duplicate_assets", "true");
-          if (maxDownloads) formData.append("max_downloads", maxDownloads);
-          if (scriptFile) formData.append("script_file", scriptFile);
-          if (audioFile) formData.append("audio_file", audioFile);
-          data = await callApiMultipart("/generate-documentary-timeline/upload", formData, statusEl, button);
+          // Array (multi-select) -> repeated content_niche_list fields;
+          // plain string (today's single-select) -> content_niche, unchanged.
+          if (Array.isArray(contentNiche)) {
+            contentNiche.forEach((key) => formData.append("content_niche_list", key));
+          } else {
+            formData.append("content_niche", contentNiche);
+          }
+          formData.append("audio_file", audioFile);
+          formData.append("enable_ai_generation", enableAiGeneration);
+          formData.append("enable_local_library", enableLocalLibrary);
+          formData.append("enable_stock_providers", enableStockProviders);
+          data = await callApiMultipart(`${basePath}/upload`, formData, statusEl, button);
         } else {
-          const body = { script: input };
+          const body = {
+            script: input, content_niche: contentNiche,
+            enable_ai_generation: enableAiGeneration,
+            enable_local_library: enableLocalLibrary,
+            enable_stock_providers: enableStockProviders,
+          };
           if (projectName) body.project_name = projectName;
-          if (allowDuplicates) body.allow_duplicate_assets = true;
-          if (maxDownloads) body.max_downloads = Number(maxDownloads);
-          data = await callApi("/generate-documentary-timeline", body, statusEl, button);
+          data = await callApi(basePath, body, statusEl, button);
         }
 
-        setStage(data ? "timeline" : null);
-        renderTimelineResults(data);
+        if (data && data.project_name) {
+          pollProgress(data.project_name, statusEl, button, mode === "edit");
+        }
       }
 
       function renderTimelineResults(result) {
@@ -369,6 +819,10 @@
         const timeline = result.timeline || [];
         const placeholders = timeline.filter((t) => t.placeholder).length;
         const downloaded = timeline.length - placeholders;
+        const avail = result.footage_availability;
+        // project_dir is a filesystem path (e.g. "projects/proj_x") — the editor
+        // route only needs the trailing project_name segment.
+        const projectName = (result.project_dir || "").split(/[\\/]/).filter(Boolean).pop();
 
         const summary = `
           <div class="summary-strip">
@@ -377,6 +831,10 @@
             <div class="summary-pill"><b>${downloaded}</b>with assets</div>
             <div class="summary-pill"><b>${placeholders}</b>placeholders</div>
           </div>
+          ${projectName ? `<a class="editor-link" href="/editor/${encodeURIComponent(projectName)}">Open in Editor &rarr;</a>` : ""}
+          ${avail && avail.thin_count
+            ? `<p class="empty-note" style="color:var(--warn);">&#9888; Pre-render scan flagged ${avail.thin_count}/${avail.total_clips} clip(s) as thin before this run started (clip(s): ${(avail.thin_clip_numbers || []).join(", ")}) — see footage_availability_report.json in the project directory.</p>`
+            : ""}
           ${result.final_video_path
             ? `<p class="empty-note">Final video: <code>${escapeHtml(result.final_video_path)}</code></p>`
             : result.assembly_error

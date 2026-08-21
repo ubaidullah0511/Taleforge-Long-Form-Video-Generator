@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taleforge</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="/theme.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="toolbar-brand">
+        <span class="brand-mark">U</span>
+        <span class="brand-name">editor<span class="brand-accent">bench</span></span>
+      </div>
+      <div class="toolbar-project">
+        <span class="project-title" id="projectLabel">Project</span>
+        <span class="project-subtitle" id="projectSubtitle"></span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="icon-btn" onclick="location.href='/'" title="Back to generator">&#8962;</button>
+        <button class="icon-btn" disabled title="Share (not available)">&#8674;</button>
+        <button class="icon-btn" disabled title="More options">&#8942;</button>
+      </div>
+    </header>
+
+    <main class="editor-main">
+      <section class="preview-section">
+        <div class="preview-frame" id="previewFrame">
+          <video id="previewVideo" controls></video>
+          <audio id="previewAudio" preload="none"></audio>
+          <div class="preview-selection-badge" id="previewSelectionBadge" hidden></div>
+        </div>
+        <div class="playback-bar">
+          <div class="playback-bar-group">
+            <button class="icon-btn" disabled title="Undo (not available)">&#8634;</button>
+            <button class="icon-btn" disabled title="Redo (not available)">&#8635;</button>
+          </div>
+          <div class="playback-bar-center">
+            <button class="speed-btn" id="speedBtn" onclick="cyclePlaybackSpeed()" title="Playback speed">1x</button>
+            <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()" title="Play">&#9654;</button>
+            <span class="playhead-timecode" id="playheadTimecode">00:00:00 / 00:00:00</span>
+          </div>
+          <div class="playback-bar-group">
+            <button class="icon-btn" id="muteBtn" onclick="toggleMute()" title="Mute narration">&#128266;</button>
+            <button class="icon-btn" onclick="scrollToGenerate()" title="Jump to export">&#8681;</button>
+            <button class="icon-btn" disabled title="Settings (not available)">&#9881;</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="timeline-header-row">
+          <p class="empty-note">Click a clip to swap its asset, regenerate it via AI, or upload a replacement. Click the timeline or drag the playhead to seek. Drag a clip left/right to preview a different order.</p>
+          <div class="zoom-controls">
+            <input type="range" class="zoom-slider" id="zoomSlider" title="Timeline zoom" />
+          </div>
+        </div>
+        <div class="warning-banner" id="reorderWarning" hidden>
+          &#9888; Preview order differs from narration timing — reordering here does not change the final video's audio sync.
+          <button class="btn-secondary" onclick="resetOrder()">Reset order</button>
+        </div>
+        <div class="chips-row" id="chipsRow"></div>
+        <div class="timeline-tracks" id="timelineTracks">
+          <div class="track-row video-track-row" id="timelineStrip"></div>
+          <div class="track-row effect-track-row" id="effectRow"></div>
+          <div class="track-row audio-track-row" id="audioRow"></div>
+        </div>
+        <p class="caption-preview" id="captionPreview"></p>
+      </section>
+
+      <section class="card" id="generateFullVideoCard">
+        <h3 style="margin-top:0;">Generate Full Video</h3>
+        <p class="empty-note">Runs the real pipeline render (Remotion composite &rarr; concat &rarr; audio mux) over the ORIGINAL timeline order — any preview-only reordering above is never sent here. Slower than a single-clip edit — this is the full-quality final pass.</p>
+        <button id="generateFullVideoBtn" onclick="generateFullVideo()">Generate Full Video</button>
+        <div class="status" id="fullVideoStatus"></div>
+        <div class="final-links" id="finalLinks"></div>
+      </section>
+    </main>
+
+    <div id="editPanel">
+      <button class="close-btn" onclick="closeEditor()">&times;</button>
+      <div id="editPanelBody"></div>
+    </div>
+
+    <div class="scrub-preview" id="scrubPreview" hidden>
+      <canvas id="scrubPreviewCanvas" width="120" height="68"></canvas>
+      <div class="scrub-preview-placeholder" id="scrubPreviewPlaceholder" hidden>no preview</div>
+      <div class="scrub-preview-time" id="scrubPreviewTime"></div>
+    </div>
+
+    <script>
+      const projectName = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+      document.getElementById("projectLabel").textContent = projectName;
+
+      let projectState = null;
+      let selectedClip = null;
+      let playQueue = [];
+      let playIndex = 0;
+      // playQueueMeta mirrors playQueue (same filter/order) but keeps each
+      // clip's clip_number + duration too, so the playhead/timecode/seek math
+      // can map an absolute timeline position across the whole back-to-back
+      // queue, not just the single active <video>.
+      let playQueueMeta = [];
+      let captionCues = [];
+      // null = original clip_number order. Otherwise an explicit array of
+      // clip_numbers — the editor's local, preview-only reorder (see Issue 4).
+      let previewOrder = null;
+      let draggedClipNumber = null;
+      let isDraggingPlayhead = false;
+
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (c) => (
+          { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+        ));
+      }
+
+      function clipTypeClass(entry) {
+        if (entry.placeholder) return "placeholder";
+        return entry.asset_metadata ? entry.asset_metadata.source : "";
+      }
+
+      function thumbHtml(entry) {
+        if (entry.placeholder || !entry.asset_url) {
+          return `<div class="placeholder-thumb">no asset</div>`;
+        }
+        if (entry.asset_metadata && entry.asset_metadata.media_type === "image") {
+          return `<img class="clip-thumb" src="${entry.asset_url}" loading="lazy" />`;
+        }
+        // preload="metadata" alone loads timing info but Chrome does not
+        // reliably paint an actual frame from it — the element stays a black
+        // box until something forces a decode. Seeking to a tiny offset once
+        // metadata is ready (a standard video-thumbnail trick) forces that
+        // decode so a real frame shows without needing playback to start.
+        //
+        // src is deferred to data-src (see observeLazyThumbs()) rather than
+        // set here — <video> has no native loading="lazy" the way <img>
+        // does, so with 50+ clips this used to fire 50+ simultaneous
+        // connections on render, blowing through Chrome's per-origin
+        // connection limit. Confirmed live: most requests came back 503
+        // (never even reached the FastAPI access log — Chrome dropped them
+        // client-side) and the real preview video's own load queued behind
+        // the pile-up, adding ~150ms to every clip click.
+        return `<video class="clip-thumb" data-src="${entry.asset_url}" muted preload="none" onloadedmetadata="this.currentTime=0.1"></video>`;
+      }
+
+      // Loads a clip-thumb <video>'s real src only once it's scrolled near
+      // the visible timeline area — pairs with the deferred data-src above.
+      // One shared observer (not per-render) so re-renders (zoom, reorder,
+      // clip edits) don't leak observers; rootMargin is generous since the
+      // row scrolls horizontally and we'd rather prefetch a bit early than
+      // show a blank frame.
+      let thumbObserver = null;
+      function observeLazyThumbs() {
+        if (!thumbObserver) {
+          thumbObserver = new IntersectionObserver((entries) => {
+            for (const e of entries) {
+              if (!e.isIntersecting) continue;
+              const video = e.target;
+              thumbObserver.unobserve(video);
+              video.src = video.dataset.src;
+              video.preload = "metadata";
+            }
+          }, { root: document.getElementById("timelineTracks"), rootMargin: "0px 600px 0px 600px" });
+        }
+        document.querySelectorAll("#timelineStrip video.clip-thumb[data-src]").forEach((v) => thumbObserver.observe(v));
+      }
+
+      // ---------- Preview-only clip ordering (Issue 4) ----------
+      function originalOrder() {
+        return (projectState.timeline || []).slice().sort((a, b) => a.clip_number - b.clip_number);
+      }
+
+      function orderedTimeline() {
+        if (!previewOrder) return originalOrder();
+        const byNumber = new Map((projectState.timeline || []).map((e) => [e.clip_number, e]));
+        return previewOrder.map((cn) => byNumber.get(cn)).filter(Boolean);
+      }
+
+      function isReordered() {
+        if (!previewOrder) return false;
+        const original = originalOrder().map((e) => e.clip_number);
+        return previewOrder.length !== original.length || previewOrder.some((cn, i) => cn !== original[i]);
+      }
+
+      function resetOrder() {
+        previewOrder = null;
+        renderTimeline();
+      }
+
+      async function loadProject() {
+        const response = await fetch(`/project/${encodeURIComponent(projectName)}`);
+        if (!response.ok) {
+          document.getElementById("timelineStrip").innerHTML =
+            `<p class="empty-note">Failed to load project (${response.status}). Has it finished generating yet?</p>`;
+          return;
+        }
+        projectState = await response.json();
+        previewOrder = null;
+        const clipCount = (projectState.timeline || []).length;
+        const nicheLabel = contentNicheLabel();
+        document.getElementById("projectSubtitle").textContent =
+          `${clipCount} clip${clipCount === 1 ? "" : "s"}${nicheLabel ? " · " + nicheLabel : ""}`;
+        setupAudioSource();
+        await loadCaptions();
+        renderTimeline();
+        renderFinalLinks();
+      }
+
+      // ---------- Multi-row timeline (video / effect / audio) ----------
+      // All three rows are built from the SAME per-clip width spec (now
+      // driven by orderedTimeline(), so a preview reorder moves all three
+      // rows together), so they render at identical widths and stay
+      // pixel-aligned as one scrolling unit inside #timelineTracks — see the
+      // CSS comment on #timelineTracks for why the playhead lives there
+      // instead of inside any individual row.
+      //
+      // Width is an explicit JS-computed pixel value, not flex-grow: with
+      // .track-row{width:max-content} (needed so all three rows share one
+      // scrollable content width — see the CSS comment there), a flex
+      // container's own width becomes exactly the sum of its children's
+      // natural sizes, which leaves flex-grow with no slack to ever
+      // distribute into. Confirmed live: every clip block rendered at an
+      // identical 301.8px regardless of duration (1.0s-5.0s) — not the
+      // intended proportional width at all, but the <video> thumbnail's own
+      // UA-default 300x150 intrinsic size winning the max-content
+      // calculation, since a percentage width can't resolve in that context.
+      // An explicit pixel width sidesteps both problems and doubles as the
+      // zoom lever.
+      //
+      // Uniform (not duration-proportional) — every clip block is the same
+      // width at a given zoom level, so zoom is purely "how many clips fit
+      // on screen," not "how long is this clip." MIN_CLIP_WIDTH goes down
+      // to a bare sliver (fit the whole 53+-clip timeline on screen at
+      // once); MAX_CLIP_WIDTH is generous enough for detailed editing.
+      const MIN_CLIP_WIDTH = 3;
+      const MAX_CLIP_WIDTH = 260;
+      let zoomWidthPx = 110;
+
+      function applyTimelineZoom(widthPx) {
+        zoomWidthPx = Math.max(MIN_CLIP_WIDTH, Math.min(MAX_CLIP_WIDTH, Math.round(widthPx)));
+        const slider = document.getElementById("zoomSlider");
+        if (slider) slider.value = String(zoomWidthPx);
+        renderTimeline();
+      }
+
+      function buildTrackSegments() {
+        return orderedTimeline().map((entry) => ({ entry, widthPx: zoomWidthPx }));
+      }
+
+      const zoomSliderEl = document.getElementById("zoomSlider");
+      if (zoomSliderEl) {
+        zoomSliderEl.min = String(MIN_CLIP_WIDTH);
+        zoomSliderEl.max = String(MAX_CLIP_WIDTH);
+        zoomSliderEl.value = String(zoomWidthPx);
+        zoomSliderEl.addEventListener("input", (e) => applyTimelineZoom(Number(e.target.value)));
+      }
+
+
+      function videoSegmentHtml(seg) {
+        const entry = seg.entry;
+        const selected = entry.clip_number === selectedClip ? "selected" : "";
+        const score = entry.asset_metadata && entry.asset_metadata.score != null
+          ? ` &middot; ${entry.asset_metadata.score.toFixed(0)}` : "";
+        return `
+          <div class="clip-block ${clipTypeClass(entry)} ${selected}" style="width:${seg.widthPx}px; flex:0 0 ${seg.widthPx}px;"
+               data-clip-number="${entry.clip_number}" draggable="true"
+               onclick="openEditor(${entry.clip_number})"
+               ondragstart="handleClipDragStart(event, ${entry.clip_number})"
+               ondragover="handleClipDragOver(event)"
+               ondrop="handleClipDrop(event, ${entry.clip_number})"
+               ondragend="handleClipDragEnd()">
+            ${thumbHtml(entry)}
+            <div class="clip-block-label">#${entry.clip_number} &middot; ${(entry.duration || 0).toFixed(1)}s${score}</div>
+          </div>`;
+      }
+
+      function effectSegmentHtml(seg) {
+        const entry = seg.entry;
+        const label = entry.placeholder ? "&mdash;" : escapeHtml(entry.recommended_effect || "&mdash;");
+        const title = escapeHtml(entry.transition || "");
+        return `<div class="effect-block" style="width:${seg.widthPx}px; flex:0 0 ${seg.widthPx}px;" title="${title}">${label}</div>`;
+      }
+
+      // Deterministic pseudo-random bar heights (sin-hash, no Math.random())
+      // so the waveform doesn't jitter on every re-render — purely decorative,
+      // this pipeline has no real narration waveform extraction.
+      function audioSegmentHtml(seg) {
+        const barCount = Math.max(2, Math.round(seg.widthPx / 12));
+        let bars = "";
+        for (let i = 0; i < barCount; i++) {
+          const seed = Math.abs(Math.sin((seg.entry.clip_number * 97 + i) * 12.9898)) * 10000;
+          const h = 25 + Math.round(seed % 65);
+          bars += `<span class="waveform-bar" style="height:${h}%"></span>`;
+        }
+        return `<div class="audio-block" style="width:${seg.widthPx}px; flex:0 0 ${seg.widthPx}px;">${bars}</div>`;
+      }
+
+      // content_niche is a plain string for single-select projects (unchanged)
+      // or an array of sub-niche keys for a multi-select generation (see
+      // app.niches.resolve_sub_niches) — everywhere it's displayed needs to
+      // handle both shapes.
+      function contentNicheLabel() {
+        const niche = projectState.content_niche;
+        if (!niche) return "";
+        return Array.isArray(niche) ? niche.join(", ") : niche;
+      }
+
+      function renderChips() {
+        const container = document.getElementById("chipsRow");
+        if (!container) return;
+        const entries = projectState.timeline || [];
+        const transitions = new Set(entries.filter((e) => !e.placeholder && e.transition).map((e) => e.transition));
+        const chips = [`<span class="chip">${entries.length} clip${entries.length === 1 ? "" : "s"}</span>`];
+        chips.push(projectState.captions_url
+          ? `<span class="chip chip-active">Subtitles</span>`
+          : `<span class="chip chip-muted">No subtitles</span>`);
+        chips.push(transitions.size
+          ? `<span class="chip">${transitions.size} transition${transitions.size === 1 ? "" : "s"}</span>`
+          : `<span class="chip chip-muted">No transitions</span>`);
+        const niches = Array.isArray(projectState.content_niche)
+          ? projectState.content_niche
+          : (projectState.content_niche ? [projectState.content_niche] : []);
+        niches.forEach((n) => chips.push(`<span class="chip chip-accent">${escapeHtml(n)}</span>`));
+        container.innerHTML = chips.join("");
+      }
+
+      function renderReorderWarning() {
+        const banner = document.getElementById("reorderWarning");
+        if (banner) banner.hidden = !isReordered();
+      }
+
+      // Full timeline rebuild — recreates every clip/effect/audio-row DOM
+      // node (including all thumbnail <video> elements), so it's relatively
+      // expensive. Only called when the underlying data/order actually
+      // changes (initial load, after a clip edit, after a reorder) — NOT on
+      // every click or every playhead tick. See updateSelectedClipHighlight()
+      // for the cheap per-click path (Issue 2 fix).
+      function renderTimeline() {
+        const segments = buildTrackSegments();
+
+        const videoContainer = document.getElementById("timelineStrip");
+        videoContainer.innerHTML = segments.map(videoSegmentHtml).join("")
+          || `<p class="empty-note">No clips in this project yet.</p>`;
+
+        const effectContainer = document.getElementById("effectRow");
+        if (effectContainer) effectContainer.innerHTML = segments.map(effectSegmentHtml).join("");
+
+        const audioContainer = document.getElementById("audioRow");
+        if (audioContainer) audioContainer.innerHTML = segments.map(audioSegmentHtml).join("");
+
+        // Playhead is a child of #timelineTracks (created once, never wiped
+        // by the innerHTML assignments above since those only touch the
+        // individual row divs) so it can span all three rows at once.
+        const tracks = document.getElementById("timelineTracks");
+        if (tracks && !document.getElementById("timelinePlayhead")) {
+          const playhead = document.createElement("div");
+          playhead.id = "timelinePlayhead";
+          playhead.className = "timeline-playhead";
+          playhead.addEventListener("mousedown", beginPlayheadDrag);
+          tracks.appendChild(playhead);
+        }
+
+        observeLazyThumbs();
+        renderChips();
+        renderReorderWarning();
+        buildPlayQueue();
+        updatePlayheadPosition();
+      }
+
+      // Cheap per-click path: toggles the .selected class on existing clip
+      // blocks in place instead of rebuilding the whole timeline (see Issue 2
+      // — rebuilding on every click was destroying/recreating 53 <video>
+      // thumbnail elements per click, ~29s to next paint on a real project;
+      // this path only touches className on nodes that already exist).
+      function updateSelectedClipHighlight() {
+        document.querySelectorAll("#timelineStrip .clip-block").forEach((block) => {
+          const cn = Number(block.dataset.clipNumber);
+          block.classList.toggle("selected", cn === selectedClip);
+        });
+      }
+
+      function buildPlayQueue() {
+        playQueueMeta = orderedTimeline()
+          .filter((e) => e.rendered_url)
+          .map((e) => ({ clipNumber: e.clip_number, duration: e.duration || 0, url: e.rendered_url }));
+        return playQueueMeta.map((m) => m.url);
+      }
+
+      function formatTimecode(totalSeconds) {
+        const s = Math.max(0, Math.floor(totalSeconds || 0));
+        const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+        const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        return `${hh}:${mm}:${ss}`;
+      }
+
+      function totalQueueDuration() {
+        return playQueueMeta.reduce((sum, m) => sum + m.duration, 0);
+      }
+
+      // Positions the playhead line + timecode label only — no DOM rebuild,
+      // safe to call on every playhead tick and every drag mousemove.
+      function previewPlayheadAt(elapsed) {
+        const playhead = document.getElementById("timelinePlayhead");
+        const label = document.getElementById("playheadTimecode");
+        const total = totalQueueDuration();
+        if (playhead) {
+          const { idx, offset } = queueIndexAtElapsed(elapsed);
+          const duration = playQueueMeta.length ? Math.max(playQueueMeta[idx].duration, 0.001) : 1;
+          playhead.style.left = `${playQueueMeta.length ? pxForQueueIndex(idx, offset / duration) : 0}px`;
+        }
+        if (label) label.textContent = `${formatTimecode(elapsed)} / ${formatTimecode(total)}`;
+      }
+
+      function updatePlayheadPosition() {
+        const total = totalQueueDuration();
+        let elapsed = 0;
+        for (let i = 0; i < playIndex && i < playQueueMeta.length; i++) elapsed += playQueueMeta[i].duration;
+        const video = document.getElementById("previewVideo");
+        if (video) elapsed += video.currentTime || 0;
+        elapsed = Math.min(elapsed, total);
+
+        previewPlayheadAt(elapsed);
+        updateCaptionPreview(elapsed);
+        syncAudioToElapsed(elapsed);
+      }
+
+      // ---------- Caption preview (below the timeline) ----------
+      function parseSrt(text) {
+        const toSeconds = (t) => {
+          const [h, m, rest] = t.trim().split(":");
+          const [s, ms] = rest.replace(",", ".").split(".");
+          return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms || 0) / 1000;
+        };
+        return text.trim().split(/\r?\n\r?\n/).map((block) => {
+          const lines = block.split(/\r?\n/);
+          const timeLine = lines.find((l) => l.includes("-->"));
+          if (!timeLine) return null;
+          const [startStr, endStr] = timeLine.split("-->");
+          return {
+            start: toSeconds(startStr), end: toSeconds(endStr),
+            text: lines.slice(lines.indexOf(timeLine) + 1).join(" ").trim(),
+          };
+        }).filter(Boolean);
+      }
+
+      async function loadCaptions() {
+        captionCues = [];
+        if (!projectState.captions_url) return;
+        try {
+          const resp = await fetch(projectState.captions_url);
+          if (resp.ok) captionCues = parseSrt(await resp.text());
+        } catch (e) {
+          captionCues = [];
+        }
+      }
+
+      function updateCaptionPreview(elapsed) {
+        const el = document.getElementById("captionPreview");
+        if (!el) return;
+        const cue = captionCues.find((c) => elapsed >= c.start && elapsed < c.end);
+        el.textContent = cue ? cue.text : "";
+        el.classList.toggle("visible", Boolean(cue));
+      }
+
+      // ---------- Parallel narration audio track (Issue 1) ----------
+      // Per-clip segments are silent by design (see the "Rough-cut preview"
+      // hint text) — narration is one continuous file, only muxed into the
+      // real output at Generate Full Video time. This plays that same real
+      // file alongside the sequenced silent video segments, kept in sync by
+      // absolute elapsed position rather than per-segment.
+      function setupAudioSource() {
+        const audio = document.getElementById("previewAudio");
+        if (!audio) return;
+        if (projectState.audio_url) {
+          if (audio.getAttribute("src") !== projectState.audio_url) audio.src = projectState.audio_url;
+        } else {
+          audio.removeAttribute("src");
+        }
+      }
+
+      // Per-clip <video> src swaps at clip boundaries have real decode-
+      // startup latency the continuously-playing <audio> doesn't, so drift
+      // spikes right at those boundaries. A hard audio.currentTime seek is
+      // audible (a pop/mute blip while the element re-syncs), and since
+      // drift clusters at clip transitions, hard-seeking on every correction
+      // is exactly what made continuous narration sound chopped up at each
+      // cut. Small drift is corrected with a gentle playbackRate nudge
+      // instead — inaudible, converges over a couple seconds. Only snap for
+      // severe desync (e.g. right after a stall), where a gradual nudge
+      // would take too long to matter anyway.
+      function driftCorrectionRate(drift, baseRate) {
+        if (Math.abs(drift) > 1) return null; // caller should hard-seek
+        if (Math.abs(drift) <= 0.05) return baseRate;
+        return baseRate * (drift > 0 ? 0.97 : 1.03);
+      }
+
+      function syncAudioToElapsed(elapsed) {
+        const audio = document.getElementById("previewAudio");
+        if (!audio || !audio.src) return;
+        if (isReordered()) {
+          if (!audio.paused) audio.pause();
+          return;
+        }
+        const baseRate = PLAYBACK_SPEEDS[speedIndex];
+        const rate = driftCorrectionRate(audio.currentTime - elapsed, baseRate);
+        if (rate === null) {
+          audio.currentTime = elapsed;
+          audio.playbackRate = baseRate;
+        } else {
+          audio.playbackRate = rate;
+        }
+      }
+
+      console.assert(driftCorrectionRate(0, 1) === 1, "no drift -> base rate");
+      console.assert(driftCorrectionRate(0.5, 1) === 0.97, "audio ahead -> slow down");
+      console.assert(driftCorrectionRate(-0.5, 1) === 1.03, "audio behind -> speed up");
+      console.assert(driftCorrectionRate(2, 1) === null, "severe drift -> hard-seek signal");
+
+      function updatePlayPauseIcon(isPaused) {
+        const btn = document.getElementById("playPauseBtn");
+        if (!btn) return;
+        btn.innerHTML = isPaused ? "&#9654;" : "&#10074;&#10074;";
+        btn.title = isPaused ? "Play" : "Pause";
+      }
+
+      function updateMuteIcon() {
+        const btn = document.getElementById("muteBtn");
+        if (!btn) return;
+        const audio = document.getElementById("previewAudio");
+        const muted = Boolean(audio && audio.muted);
+        btn.innerHTML = muted ? "&#128263;" : "&#128266;";
+        btn.title = muted ? "Unmute narration" : "Mute narration";
+      }
+
+      // The actual mute control: previewAudio is the only element narration
+      // is ever audible through (previewVideo's own track is silent by
+      // design — see the volumechange listener below), so this toggles it
+      // directly rather than routing through the native <video controls>
+      // icon, which was easy to miss/mis-click and only ever muted the
+      // already-silent video track on its own.
+      function toggleMute() {
+        const audio = document.getElementById("previewAudio");
+        if (!audio) return;
+        audio.muted = !audio.muted;
+        updateMuteIcon();
+      }
+
+      const previewVideoEl = document.getElementById("previewVideo");
+      previewVideoEl.addEventListener("play", () => {
+        const audio = document.getElementById("previewAudio");
+        if (audio && audio.src && !isReordered()) audio.play().catch(() => {});
+        updatePlayPauseIcon(false);
+      });
+      previewVideoEl.addEventListener("pause", () => {
+        const audio = document.getElementById("previewAudio");
+        if (audio) audio.pause();
+        updatePlayPauseIcon(true);
+      });
+      // previewVideo's own audio track is silent by design (see the
+      // narration-audio comment below) — real narration only plays through
+      // previewAudio. The native <video controls> mute/volume icon only
+      // ever toggled previewVideo.muted, which was already inaudible, so
+      // clicking it did nothing the user could hear. Mirroring its state
+      // (via the "volumechange" event, which fires for both the built-in
+      // mute button and the volume slider) is what actually wires that icon
+      // to the sound the user hears.
+      previewVideoEl.addEventListener("volumechange", () => {
+        const audio = document.getElementById("previewAudio");
+        if (!audio) return;
+        audio.muted = previewVideoEl.muted;
+        audio.volume = previewVideoEl.volume;
+        updateMuteIcon();
+      });
+      updateMuteIcon();
+
+      // ---------- Playback bar extras ----------
+      const PLAYBACK_SPEEDS = [1, 1.5, 2, 0.5];
+      let speedIndex = 0;
+      function cyclePlaybackSpeed() {
+        speedIndex = (speedIndex + 1) % PLAYBACK_SPEEDS.length;
+        const speed = PLAYBACK_SPEEDS[speedIndex];
+        document.getElementById("previewVideo").playbackRate = speed;
+        const audio = document.getElementById("previewAudio");
+        if (audio) audio.playbackRate = speed;
+        document.getElementById("speedBtn").textContent = `${speed}x`;
+      }
+
+      function scrollToGenerate() {
+        const el = document.getElementById("generateFullVideoCard");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      // Restarts the whole queue from position 0 — used by togglePlayPause()
+      // only when there's nowhere sensible to "resume" from (nothing has
+      // played yet this session, or the queue already ran to the end).
+      function playPreview() {
+        playQueue = buildPlayQueue();
+        playIndex = 0;
+        updatePlayheadPosition();
+        if (!playQueue.length) {
+          alert("No rendered segments yet for this project.");
+          return;
+        }
+        const video = document.getElementById("previewVideo");
+        video.playbackRate = PLAYBACK_SPEEDS[speedIndex];
+        video.src = playQueue[0];
+        video.play();
+        const audio = document.getElementById("previewAudio");
+        if (audio && audio.src && !isReordered()) {
+          audio.playbackRate = PLAYBACK_SPEEDS[speedIndex];
+          audio.currentTime = 0;
+          audio.play().catch(() => {});
+        }
+      }
+
+      // Play/pause toggle for the main playback button: pauses if currently
+      // playing; otherwise resumes from wherever the playhead already sits
+      // (never forces back to 0:00) — except when there's genuinely nothing
+      // to resume (first play this session, or the queue already ended),
+      // where "resume" doesn't mean anything and a fresh start is correct.
+      function togglePlayPause() {
+        const video = document.getElementById("previewVideo");
+        if (video.src && !video.paused) {
+          video.pause();
+          return;
+        }
+        if (!video.src || playIndex >= playQueue.length) {
+          playPreview();
+          return;
+        }
+        video.play();
+      }
+
+      document.getElementById("previewVideo").addEventListener("ended", () => {
+        playIndex++;
+        updatePlayheadPosition();
+        if (playIndex < playQueue.length) {
+          const video = document.getElementById("previewVideo");
+          video.src = playQueue[playIndex];
+          video.play();
+        } else {
+          const audio = document.getElementById("previewAudio");
+          if (audio) audio.pause();
+        }
+      });
+
+      // Drives the playhead line/timecode/caption/audio-sync continuously
+      // during playback — additive listener, does not touch the "ended"
+      // listener above.
+      document.getElementById("previewVideo").addEventListener("timeupdate", updatePlayheadPosition);
+
+      // ---------- Seeking: click timeline / drag playhead (Issue 3) ----------
+      // Matches .track-row{gap:6px} in theme.css — pixel math below only
+      // lines up with the actual rendered blocks if this stays in sync.
+      const CLIP_GAP_PX = 6;
+
+      // Clips are uniform width now (not duration-proportional), so pixel
+      // position is "which clip index" (fixed stride) + "how far into that
+      // clip" (proportional within just that one block's width) — a plain
+      // elapsed/total fraction of the row's pixel width no longer lines up
+      // with block boundaries once every block is the same size regardless
+      // of duration.
+      function queueIndexAtPx(x) {
+        if (!playQueueMeta.length) return { idx: 0, frac: 0 };
+        const stride = zoomWidthPx + CLIP_GAP_PX;
+        const idx = Math.max(0, Math.min(Math.floor(x / stride), playQueueMeta.length - 1));
+        const withinPx = Math.max(0, Math.min(zoomWidthPx, x - idx * stride));
+        return { idx, frac: zoomWidthPx > 0 ? withinPx / zoomWidthPx : 0 };
+      }
+
+      function pxForQueueIndex(idx, frac) {
+        return idx * (zoomWidthPx + CLIP_GAP_PX) + Math.max(0, Math.min(1, frac)) * zoomWidthPx;
+      }
+
+      function elapsedFromClientX(clientX) {
+        const tracks = document.getElementById("timelineTracks");
+        const rect = tracks.getBoundingClientRect();
+        const x = clientX - rect.left + tracks.scrollLeft;
+        if (!playQueueMeta.length) return 0;
+        const { idx, frac } = queueIndexAtPx(x);
+        let acc = 0;
+        for (let i = 0; i < idx; i++) acc += playQueueMeta[i].duration;
+        return acc + frac * playQueueMeta[idx].duration;
+      }
+
+      // Was real playback (not just the drag-preview) active when the drag
+      // started? Drives whether release resumes playback or leaves it
+      // paused at the new position (see the mouseup handler below).
+      let wasPlayingBeforeDrag = false;
+
+      function beginPlayheadDrag(e) {
+        isDraggingPlayhead = true;
+        const video = document.getElementById("previewVideo");
+        wasPlayingBeforeDrag = Boolean(video && !video.paused);
+        // Pausing (not just leaving it running) is the actual fix here: an
+        // unpaused video keeps firing "timeupdate" during the drag, and its
+        // handler (updatePlayheadPosition) fights the drag's own
+        // previewPlayheadAt() calls for control of the playhead's position
+        // every frame — that fight, plus the real decode work a playing
+        // video does in the background, is what read as "lag," not the
+        // (already lightweight, thumbnail-only) scrub preview itself.
+        // video.pause() also pauses previewAudio via the existing "pause"
+        // listener below, so nothing else needs to touch it here.
+        if (wasPlayingBeforeDrag) video.pause();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      // Shared by seekToElapsed() and the scrub preview below — which
+      // playQueueMeta entry (and offset into it) a given elapsed time falls
+      // into.
+      function queueIndexAtElapsed(elapsed) {
+        let acc = 0, idx = 0;
+        for (; idx < playQueueMeta.length - 1; idx++) {
+          if (elapsed < acc + playQueueMeta[idx].duration) break;
+          acc += playQueueMeta[idx].duration;
+        }
+        return { idx, offset: Math.max(0, elapsed - acc) };
+      }
+
+      // ---------- Scrub-preview popup (drag playhead without loading video) ----------
+      // Reuses whichever <video>/<img> is already sitting in that clip's
+      // timeline block — same element the always-rendered thumbnail row
+      // already decoded (see observeLazyThumbs()) — and blits its current
+      // frame onto a small canvas. No new network request, no src swap on
+      // the real preview <video>, so no decode/seek stutter while dragging;
+      // the real video only updates on release (seekToElapsed, unchanged).
+      let scrubPreviewClipNumber = null;
+
+      function updateScrubPreview(clientX, clientY, elapsed) {
+        const popup = document.getElementById("scrubPreview");
+        const canvas = document.getElementById("scrubPreviewCanvas");
+        const placeholder = document.getElementById("scrubPreviewPlaceholder");
+        const timeLabel = document.getElementById("scrubPreviewTime");
+
+        if (!popup || !canvas || !placeholder || !timeLabel || !playQueueMeta.length) {
+          return;
+        }
+
+        const { idx } = queueIndexAtElapsed(elapsed);
+        const clipNumber = playQueueMeta[idx].clipNumber;
+
+        if (clipNumber !== scrubPreviewClipNumber) {
+          scrubPreviewClipNumber = clipNumber;
+
+          const thumb = document.querySelector(
+            `#timelineStrip .clip-block[data-clip-number="${clipNumber}"] .clip-thumb`
+          );
+
+          const ready = thumb && (
+            (thumb.tagName === "VIDEO" && thumb.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) ||
+            (thumb.tagName === "IMG" && thumb.complete && thumb.naturalWidth > 0)
+          );
+
+          canvas.hidden = !ready;
+          placeholder.hidden = ready;
+
+          if (ready) {
+            const context = canvas.getContext("2d");
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.drawImage(thumb, 0, 0, canvas.width, canvas.height);
+          }
+        }
+
+        timeLabel.textContent = formatTimecode(elapsed);
+        popup.style.left = `${clientX}px`;
+        popup.style.top = `${clientY}px`;
+        popup.hidden = false;
+      }
+
+      function hideScrubPreview() {
+        const popup = document.getElementById("scrubPreview");
+        if (popup) popup.hidden = true;
+        scrubPreviewClipNumber = null;
+      }
+
+      window.addEventListener("blur", () => {
+        if (!isDraggingPlayhead) return;
+        isDraggingPlayhead = false;
+        hideScrubPreview();
+      });
+
+      document.addEventListener("mousemove", (e) => {
+        if (!isDraggingPlayhead) return;
+        const elapsed = elapsedFromClientX(e.clientX);
+        previewPlayheadAt(elapsed);
+        updateScrubPreview(e.clientX, e.clientY, elapsed);
+      });
+
+      // Set right before the drag's own seek below, read (and cleared) by
+      // the "click" listener right after. Necessary because mousedown on
+      // the playhead + mouseup anywhere else in #timelineTracks (which is
+      // the normal case — you rarely release exactly back over the 1px
+      // line) makes the browser fire a *separate* "click" event on their
+      // nearest common ancestor, #timelineTracks, right after mouseup — by
+      // which point isDraggingPlayhead has already been reset to false, so
+      // the click listener's own isDraggingPlayhead guard can't catch it.
+      // Confirmed live: this synthesized click was calling seekToElapsed
+      // with forcePlay=true on every drag release, force-starting playback
+      // regardless of wasPlayingBeforeDrag — the actual cause of "dragging
+      // the playhead still triggers playback" surviving the previous fix
+      // (which only patched the mouseup handler's own seek call).
+      let suppressNextTracksClick = false;
+
+      document.addEventListener("mouseup", (e) => {
+        if (!isDraggingPlayhead) return;
+        isDraggingPlayhead = false;
+        suppressNextTracksClick = true;
+        hideScrubPreview();
+        // Resume only if playback was actually running before the drag —
+        // beginPlayheadDrag() paused it going in, so seekToElapsed's own
+        // "!video.paused" fallback would otherwise always read paused here.
+        seekToElapsed(elapsedFromClientX(e.clientX), wasPlayingBeforeDrag);
+      });
+
+      document.getElementById("timelineTracks").addEventListener("click", (e) => {
+        if (suppressNextTracksClick) {
+          suppressNextTracksClick = false;
+          return;
+        }
+        if (isDraggingPlayhead || e.target.closest(".clip-block")) return;
+        seekToElapsed(elapsedFromClientX(e.clientX), true);
+      });
+
+      // forcePlay=true always resumes playback from the new position
+      // (explicit scrub/click gesture). forcePlay=false preserves whatever
+      // play/pause state was already active (used when selecting a clip to
+      // edit, where jumping the preview shouldn't itself start blaring audio
+      // if playback was paused).
+      function seekToElapsed(elapsed, forcePlay) {
+        if (!playQueueMeta.length) buildPlayQueue();
+        if (!playQueueMeta.length) return;
+        const total = totalQueueDuration();
+        elapsed = Math.max(0, Math.min(elapsed, total));
+
+        const { idx, offset } = queueIndexAtElapsed(elapsed);
+
+        playQueue = playQueueMeta.map((m) => m.url);
+        playIndex = idx;
+        const video = document.getElementById("previewVideo");
+        const targetUrl = playQueueMeta[idx].url;
+        const shouldPlay = forcePlay || !video.paused;
+
+        const applyOffset = () => {
+          video.currentTime = offset;
+          if (shouldPlay) video.play(); else video.pause();
+        };
+        if (video.src !== targetUrl) {
+          video.src = targetUrl;
+          video.addEventListener("loadedmetadata", applyOffset, { once: true });
+        } else {
+          applyOffset();
+        }
+
+        const audio = document.getElementById("previewAudio");
+        if (audio && audio.src && !isReordered()) {
+          audio.currentTime = elapsed;
+          if (shouldPlay) audio.play().catch(() => {}); else audio.pause();
+        }
+
+        previewPlayheadAt(elapsed);
+      }
+
+      function seekToClipStart(clipNumber) {
+        const idx = playQueueMeta.findIndex((m) => m.clipNumber === clipNumber);
+        if (idx === -1) return; // no rendered segment for this clip (e.g. placeholder) — nothing to seek to
+        let acc = 0;
+        for (let i = 0; i < idx; i++) acc += playQueueMeta[i].duration;
+        seekToElapsed(acc, false);
+      }
+
+      // ---------- Drag-to-reorder (Issue 4, preview-only) ----------
+      function handleClipDragStart(e, clipNumber) {
+        draggedClipNumber = clipNumber;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(clipNumber));
+      }
+
+      function handleClipDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }
+
+      function handleClipDrop(e, targetClipNumber) {
+        e.preventDefault();
+        const dragged = draggedClipNumber;
+        draggedClipNumber = null;
+        if (dragged == null || dragged === targetClipNumber) return;
+        const order = orderedTimeline().map((entry) => entry.clip_number);
+        const fromIndex = order.indexOf(dragged);
+        const toIndex = order.indexOf(targetClipNumber);
+        if (fromIndex === -1 || toIndex === -1) return;
+        order.splice(fromIndex, 1);
+        order.splice(toIndex, 0, dragged);
+        previewOrder = order;
+        renderTimeline();
+      }
+
+      function handleClipDragEnd() {
+        draggedClipNumber = null;
+      }
+
+      function updateSelectionOverlay() {
+        const badge = document.getElementById("previewSelectionBadge");
+        if (!badge) return;
+        if (selectedClip == null) { badge.hidden = true; return; }
+        const entry = (projectState.timeline || []).find((e) => e.clip_number === selectedClip);
+        badge.hidden = false;
+        badge.classList.toggle("placeholder-badge", Boolean(entry && entry.placeholder));
+        badge.textContent = entry && entry.placeholder
+          ? `Clip ${selectedClip} — no footage yet`
+          : `Editing Clip ${selectedClip}`;
+      }
+
+      // A placeholder clip has no source asset — the previous clip's frame
+      // would otherwise just sit there in the big preview <video>, which
+      // reads as "the app is broken/frozen" rather than "this clip has no
+      // footage yet" (see Issue 2: placeholder clips must show an explicit,
+      // unambiguous empty state, not a stale or blank-looking frame).
+      function showNoFootagePreview() {
+        const video = document.getElementById("previewVideo");
+        if (!video) return;
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+
+      function openEditor(clipNumber) {
+        selectedClip = clipNumber;
+        updateSelectedClipHighlight();
+        renderEditPanel();
+        updateSelectionOverlay();
+        document.getElementById("editPanel").classList.add("open");
+        // #editPanel is position:fixed and previously just floated on top of
+        // (covering) whatever was underneath — this reserves the same space
+        // in the main content's own layout instead (see the CSS comment on
+        // .editor-main), so the timeline is never hidden behind it.
+        document.body.classList.add("panel-open");
+        const entry = (projectState.timeline || []).find((e) => e.clip_number === clipNumber);
+        if (entry && !entry.rendered_url) {
+          // Placeholder (or any clip with no rendered segment yet, e.g. an
+          // older project generated before placeholders got a black-frame
+          // segment) — nothing in playQueueMeta to seek to, so show the
+          // explicit empty state instead of leaving whatever was playing.
+          showNoFootagePreview();
+        } else {
+          seekToClipStart(clipNumber);
+        }
+      }
+
+      function closeEditor() {
+        document.getElementById("editPanel").classList.remove("open");
+        document.body.classList.remove("panel-open");
+        selectedClip = null;
+        updateSelectedClipHighlight();
+        updateSelectionOverlay();
+      }
+
+      function renderEditPanel() {
+        const entry = (projectState.timeline || []).find((e) => e.clip_number === selectedClip);
+        if (!entry) return;
+
+        const currentAssetHtml = entry.placeholder
+          ? `<div class="current-asset placeholder">
+               <div class="no-footage-frame">
+                 <span class="no-footage-title">No footage yet</span>
+                 <span class="no-footage-sub">Clip ${entry.clip_number} &middot; ${(entry.duration || 0).toFixed(1)}s${entry.note ? ` &mdash; ${escapeHtml(entry.note)}` : ""}</span>
+               </div>
+             </div>`
+          : `<div class="current-asset">${thumbHtml(entry)}</div>`;
+
+        document.getElementById("editPanelBody").innerHTML = `
+          <h3>Clip ${entry.clip_number} <span class="time">${escapeHtml(entry.start)}&ndash;${escapeHtml(entry.end)}</span></h3>
+          <p class="script">${escapeHtml(entry.script)}</p>
+          ${currentAssetHtml}
+          <div class="meta-line">${entry.placeholder ? "placeholder" : escapeHtml(clipTypeClass(entry))} &middot; ${escapeHtml(entry.note || "")}</div>
+          <div class="status" id="editStatus"></div>
+
+          <h4>Regenerate</h4>
+          <button onclick="regenerateAI()">Regenerate via AI</button>
+
+          <h4>Upload custom file</h4>
+          <input type="file" id="uploadFile" accept="video/*,image/*" />
+          <button onclick="uploadCustom()">Upload &amp; use</button>
+        `;
+      }
+
+      async function patchClip(body) {
+        const statusEl = document.getElementById("editStatus");
+        statusEl.className = "status";
+        statusEl.textContent = "Re-rendering clip...";
+        const started = performance.now();
+        try {
+          const response = await fetch(`/project/${encodeURIComponent(projectName)}/clip/${selectedClip}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const raw = await response.text();
+          const data = raw ? JSON.parse(raw) : {};
+          if (!response.ok) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Error: ${data.detail || raw}`;
+            return;
+          }
+          const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+          await loadProject();
+          renderEditPanel();
+          document.getElementById("editStatus").textContent = `Done in ${elapsed}s.`;
+        } catch (err) {
+          statusEl.className = "status error";
+          statusEl.textContent = `Request failed: ${err}`;
+        }
+      }
+
+      function regenerateAI() {
+        patchClip({ mode: "ai" });
+      }
+
+      async function uploadCustom() {
+        const fileInput = document.getElementById("uploadFile");
+        const file = fileInput.files[0];
+        if (!file) { alert("Choose a file first."); return; }
+        const statusEl = document.getElementById("editStatus");
+        statusEl.className = "status";
+        statusEl.textContent = "Uploading & re-rendering...";
+        const started = performance.now();
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+          const response = await fetch(`/project/${encodeURIComponent(projectName)}/clip/${selectedClip}/upload`, {
+            method: "PATCH",
+            body: formData,
+          });
+          const raw = await response.text();
+          const data = raw ? JSON.parse(raw) : {};
+          if (!response.ok) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Error: ${data.detail || raw}`;
+            return;
+          }
+          const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+          await loadProject();
+          renderEditPanel();
+          document.getElementById("editStatus").textContent = `Done in ${elapsed}s.`;
+        } catch (err) {
+          statusEl.className = "status error";
+          statusEl.textContent = `Request failed: ${err}`;
+        }
+      }
+
+      // Primary CTA is the best available REAL deliverable, in priority
+      // order: narrated final video > captioned/Remotion video (no
+      // narration muxed in) > the legacy rough-cut concat artifact
+      // (final_video.mp4 — only ever the primary when nothing better
+      // exists, and labeled as a rough cut when it is). `download` (no
+      // explicit filename) triggers a real file download using the URL's
+      // own filename, instead of opening the video in-browser.
+      function renderFinalLinks() {
+        const withNarration = projectState.final_video_with_narration_url;
+        const subtitled = projectState.subtitled_video_url;
+        const roughCut = projectState.final_video_url;
+
+        let primaryUrl = null;
+        let primaryLabel = "Download Full Video";
+        if (withNarration) {
+          primaryUrl = withNarration;
+        } else if (subtitled) {
+          primaryUrl = subtitled;
+        } else if (roughCut) {
+          primaryUrl = roughCut;
+          primaryLabel = "Download Rough-Cut Video (no captions/narration)";
+        }
+
+        const links = [];
+        if (primaryUrl) {
+          links.push(`<a href="${primaryUrl}" download class="download-btn">${primaryLabel}</a>`);
+        }
+        // Secondary links: other real variants that exist but weren't
+        // chosen as the primary deliverable above — still reachable, just
+        // not presented as THE final output.
+        if (withNarration && primaryUrl !== withNarration) {
+          links.push(`<a href="${withNarration}" target="_blank">Final video (with narration audio)</a>`);
+        }
+        if (subtitled && primaryUrl !== subtitled) {
+          links.push(`<a href="${subtitled}" target="_blank">Final video (captions, no narration mux)</a>`);
+        }
+        if (roughCut && primaryUrl !== roughCut) {
+          links.push(`<a href="${roughCut}" target="_blank">Rough-cut video (no captions/transitions)</a>`);
+        }
+        document.getElementById("finalLinks").innerHTML = links.join("");
+      }
+
+      function pollFullVideoProgress() {
+        const POLL_MS = 1000;
+        const statusEl = document.getElementById("fullVideoStatus");
+
+        async function tick() {
+          let response;
+          try {
+            response = await fetch(`/progress/${encodeURIComponent(projectName)}`);
+          } catch (err) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Progress check failed: ${err}`;
+            document.getElementById("generateFullVideoBtn").disabled = false;
+            return;
+          }
+          const data = await response.json();
+          const counter = data.current && data.total ? ` (${data.current}/${data.total})` : "";
+          statusEl.className = "status";
+          statusEl.textContent = `${data.detail || "Working..."}${counter}`;
+
+          if (!data.done) {
+            setTimeout(tick, POLL_MS);
+            return;
+          }
+          document.getElementById("generateFullVideoBtn").disabled = false;
+          if (data.error) {
+            statusEl.className = "status error";
+            statusEl.textContent = `Error: ${data.error}`;
+            return;
+          }
+          statusEl.textContent = "Full video ready.";
+          await loadProject();
+        }
+
+        tick();
+      }
+
+      // Always POSTs with no body — the backend renders documentary_pipeline's
+      // own persisted timeline.json (the ORIGINAL clip_number order) regardless
+      // of any local previewOrder state above; reordering here is never sent.
+      async function generateFullVideo() {
+        const btn = document.getElementById("generateFullVideoBtn");
+        btn.disabled = true;
+        const statusEl = document.getElementById("fullVideoStatus");
+        statusEl.className = "status";
+        statusEl.textContent = "Starting full render...";
+        try {
+          const response = await fetch(`/project/${encodeURIComponent(projectName)}/generate-full-video`, { method: "POST" });
+          if (!response.ok) {
+            const raw = await response.text();
+            statusEl.className = "status error";
+            statusEl.textContent = `Error: ${raw}`;
+            btn.disabled = false;
+            return;
+          }
+        } catch (err) {
+          statusEl.className = "status error";
+          statusEl.textContent = `Request failed: ${err}`;
+          btn.disabled = false;
+          return;
+        }
+        pollFullVideoProgress();
+      }
+
+      loadProject();
+    </script>
+  </body>
+</html>

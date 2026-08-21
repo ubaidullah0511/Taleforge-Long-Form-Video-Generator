@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 from app.clip_ingest import probe
+from app.ffmpeg_utils import get_ffmpeg_path
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def mux_narration_audio(video_path: Path, audio_path: str, output_path: Path) ->
             video_duration, audio_duration, pad_seconds,
         )
         args = [
-            "ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path),
+            get_ffmpeg_path(), "-y", "-i", str(video_path), "-i", str(audio_path),
             "-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={pad_seconds}[v]",
             "-map", "[v]", "-map", "1:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
@@ -53,7 +54,7 @@ def mux_narration_audio(video_path: Path, audio_path: str, output_path: Path) ->
         # all. Deliberately no -shortest here: the video must keep its full
         # length exactly as the table decided, even past where narration ends.
         args = [
-            "ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path),
+            get_ffmpeg_path(), "-y", "-i", str(video_path), "-i", str(audio_path),
             "-map", "0:v", "-map", "1:a",
             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
             str(output_path),

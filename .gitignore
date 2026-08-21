@@ -15,3 +15,20 @@ uploads/
 remotion/node_modules/
 node_modules/
 .claude/
+logs/
+ClipGeneration-Setup.exe
+dist/
+build/
+ClipGeneration.exe
+*.spec
+*.log
+*.zip
+
+# Bundled static ffmpeg binaries (~200MB, downloaded not authored — see
+# bin/FFMPEG-README.txt for the exact build/version and bin/FFMPEG-LICENSE.txt
+# for its GPL v3 terms). Each sits just under GitHub's 100MB file limit;
+# tracking them in git risks breaking future pushes on any size creep and
+# permanently bloats every clone. End users get them via the compiled
+# installer (see installer.nsi), not via git clone.
+bin/ffmpeg.exe
+bin/ffprobe.exe

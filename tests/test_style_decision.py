@@ -1,12 +1,12 @@
 """Offline test for app.style_decision.decide_style — no network/API keys
-needed, Groq is mocked. Run with: pytest tests/test_style_decision.py
+needed, the LLM call is mocked. Run with: pytest tests/test_style_decision.py
 """
 from unittest.mock import patch
 
 from app.style_decision import StyleDecision, decide_style
 
 
-def test_decide_style_returns_valid_groq_response():
+def test_decide_style_returns_valid_llm_response():
     data = {"pacing": "fast", "transition_style": "slide", "caption_emphasis": ["war", "victory"]}
     with patch("app.style_decision.generate_json", return_value=data):
         decision = decide_style("some script")
@@ -22,7 +22,7 @@ def test_decide_style_normalizes_invalid_pacing_and_transition():
     assert decision.caption_emphasis == ["x"]
 
 
-def test_decide_style_falls_back_to_defaults_when_groq_raises():
+def test_decide_style_falls_back_to_defaults_when_llm_raises():
     with patch("app.style_decision.generate_json", side_effect=RuntimeError("network down")):
         decision = decide_style("some script")
     assert decision == StyleDecision()  # never blocks/raises — sensible hardcoded defaults
@@ -43,9 +43,9 @@ def test_decide_style_caps_and_stringifies_emphasis_list():
 
 
 if __name__ == "__main__":
-    test_decide_style_returns_valid_groq_response()
+    test_decide_style_returns_valid_llm_response()
     test_decide_style_normalizes_invalid_pacing_and_transition()
-    test_decide_style_falls_back_to_defaults_when_groq_raises()
+    test_decide_style_falls_back_to_defaults_when_llm_raises()
     test_decide_style_falls_back_when_response_is_malformed()
     test_decide_style_caps_and_stringifies_emphasis_list()
     print("OK")

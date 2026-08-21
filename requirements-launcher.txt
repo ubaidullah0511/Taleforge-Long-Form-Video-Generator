@@ -1,0 +1,10 @@
+# Dependencies for building app_tray.py into ClipGeneration.exe via PyInstaller.
+# These are a packaging-time concern only -- the running app (uvicorn/FastAPI)
+# never imports pystray, so they're kept out of requirements.txt on purpose.
+#
+# Install into the project's .venv before running PyInstaller:
+#   .venv\Scripts\pip install -r requirements-launcher.txt
+pystray
+pyinstaller
+# Pillow is already in requirements.txt (the main app uses opencv/Pillow too),
+# so it isn't repeated here.

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.config import settings
+from app.ffmpeg_utils import get_ffmpeg_path, get_ffprobe_path
 from app.llm_client import generate_json_from_video
 from app.models import ClipRecord
 from app.vector_store import upsert_clip
@@ -22,7 +23,7 @@ def probe(video_path: str) -> tuple[float, str]:
     """Returns (duration_seconds, resolution) via ffprobe."""
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-print_format", "json",
+            get_ffprobe_path(), "-v", "error", "-print_format", "json",
             "-show_entries", "format=duration:stream=width,height",
             video_path,
         ],
@@ -39,7 +40,7 @@ def _extract_segment(video_path: str, start: float, end: float) -> str:
     tmp_path = str(Path(tempfile.gettempdir()) / f"seg_{uuid.uuid4().hex}.mp4")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-ss", str(start), "-to", str(end),
+            get_ffmpeg_path(), "-y", "-ss", str(start), "-to", str(end),
             "-i", video_path, "-c", "copy", tmp_path,
         ],
         capture_output=True, check=True,

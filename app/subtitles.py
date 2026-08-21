@@ -4,6 +4,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.ffmpeg_utils import get_ffmpeg_path
 from app.models import TimelineEntry
 from app.timecode import parse_timestamp
 
@@ -129,7 +130,7 @@ def _escape_ffmpeg_filter_path(path: str) -> str:
 def burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> bool:
     escaped_srt = _escape_ffmpeg_filter_path(str(srt_path.resolve()))
     result = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video_path), "-vf", f"subtitles='{escaped_srt}'",
+        [get_ffmpeg_path(), "-y", "-i", str(video_path), "-vf", f"subtitles='{escaped_srt}'",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output_path)],
         capture_output=True,
     )
