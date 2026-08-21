@@ -94,11 +94,24 @@ Section "Application Files (required)" SEC_APP
     ; API keys and must never be bundled into a distributable installer.
     ; Only .env.example ships; each install needs its own .env.
     ;
+    ; app/custom_niches.json is deliberately excluded too -- it's this dev
+    ; machine's own user-generated niches (created via the website's "+
+    ; Niche" button while testing, e.g. Tennis/Alex Eala/American Secrets),
+    ; not shipped product config. app/niches.py's _load_custom_niches_file()
+    ; already tolerates the file being entirely absent (returns {}, no
+    ; error), so a fresh install correctly starts with only the built-in
+    ; niches and no restart/first-run step is needed to reach that state.
+    ;
     ; "dist" / "build" / "*.spec" are PyInstaller's output and intermediate
     ; directories for ClipGeneration.exe -- the exe itself is copied
     ; explicitly below instead of via this recursive glob, since dist\
     ; also accumulates stale intermediate files across rebuilds.
-    File /r /x ".git" /x ".venv" /x "node_modules" /x ".remotion" /x "projects" /x "clips" /x "__pycache__" /x "*.pyc" /x ".pytest_cache" /x ".cache" /x ".claude" /x ".env" /x "uploads" /x "chroma" /x "*.log" /x "ClipGeneration-Setup.exe" /x "dist" /x "build" /x "*.spec" "*.*"
+    ;
+    ; "*.zip" excludes stray dev-machine archives (e.g. an ad hoc zip of
+    ; dist\ made while sharing a build by hand) -- .gitignore already keeps
+    ; these out of git, but that's a separate mechanism this recursive File
+    ; /r glob doesn't consult, so it needs its own exclusion here too.
+    File /r /x ".git" /x ".venv" /x "node_modules" /x ".remotion" /x "projects" /x "clips" /x "__pycache__" /x "*.pyc" /x ".pytest_cache" /x ".cache" /x ".claude" /x ".env" /x "custom_niches.json" /x "uploads" /x "chroma" /x "*.log" /x "*.zip" /x "ClipGeneration-Setup.exe" /x "dist" /x "build" /x "*.spec" "*.*"
 
     ; The compiled tray launcher (see BUILD STEPS above) -- must exist at
     ; dist\ClipGeneration.exe before running makensis.
